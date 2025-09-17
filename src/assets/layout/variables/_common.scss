@@ -1,0 +1,44 @@
+:root {
+  /* === Tokens de marca === */
+  --p-primary-color: rgba(25, 140, 63, 1);   /* #198C3F */
+  --p-primary-contrast-color: #ffffff;
+
+  --p-text-color: #0f172a;
+  --p-text-muted-color: #64748b;
+
+  --p-content-background: #ffffff;
+  --p-content-border-color: rgba(0, 0, 0, .06);
+  --p-content-hover-background: rgba(25, 140, 63, 0.06);
+
+  --p-overlay-popover-background: #ffffff;
+  --p-mask-background: rgba(0, 0, 0, 0.4);
+
+  --p-transition-duration: .2s;         /* tiempo, no color */
+  --p-content-border-radius: 10px;
+
+  --p-focus-ring-width: 2px;
+  --p-focus-ring-style: solid;
+  --p-focus-ring-color: rgba(25, 140, 63, .35);
+  --p-focus-ring-offset: 2px;
+  --p-focus-ring-shadow: 0 0 0 3px rgba(25, 140, 63, .15);
+
+  /* === Mapeo al tema/PrimeVue === */
+  --primary-color: var(--p-primary-color);
+  --primary-contrast-color: var(--p-primary-contrast-color);
+  --text-color: var(--p-text-color);
+  --text-color-secondary: var(--p-text-muted-color);
+  --surface-border: var(--p-content-border-color);
+  --surface-card: var(--p-content-background);
+  --surface-hover: var(--p-content-hover-background);
+  --surface-overlay: var(--p-overlay-popover-background);
+  --transition-duration: var(--p-transition-duration);
+  --maskbg: var(--p-mask-background);
+  --content-border-radius: var(--p-content-border-radius);
+  --layout-section-transition-duration: .2s;
+  --element-transition-duration: var(--p-transition-duration);
+  --focus-ring-width: var(--p-focus-ring-width);
+  --focus-ring-style: var(--p-focus-ring-style);
+  --focus-ring-color: var(--p-focus-ring-color);
+  --focus-ring-offset: var(--p-focus-ring-offset);
+  --focus-ring-shadow: var(--p-focus-ring-shadow);
+}
