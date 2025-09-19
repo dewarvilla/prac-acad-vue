@@ -307,6 +307,43 @@ function editProduct(row) {
     productDialog.value = true;
 }
 
+/* ===== Helpers para payload y errores (camelCase -> snake_case) ===== */
+const FIELD_MAP = {
+    periodo: 'periodo',
+    // Pregrado
+    fechaAperturaPreg: 'fecha_apertura_preg',
+    fechaCierreDocentePreg: 'fecha_cierre_docente_preg',
+    fechaCierreJefeDepart: 'fecha_cierre_jefe_depart',
+    fechaCierreDecano: 'fecha_cierre_decano',
+    // Postgrado
+    fechaAperturaPostg: 'fecha_apertura_postg',
+    fechaCierreDocentePostg: 'fecha_cierre_docente_postg',
+    fechaCierreCoordinadorPostg: 'fecha_cierre_coordinador_postg',
+    fechaCierreJefePostg: 'fecha_cierre_jefe_postg'
+};
+
+// Normaliza Date -> 'YYYY-MM-DD' y arma el payload en snake_case
+function buildPayload() {
+    const out = {};
+    for (const [camel, snake] of Object.entries(FIELD_MAP)) {
+        const v = product.value[camel];
+        out[snake] = camel !== 'periodo' ? ymd(v) : v;
+    }
+    return out;
+}
+
+// Traduce errores del backend (snake) -> claves camel para mostrarlos en el form
+function applyServerErrors(errs = {}) {
+    const snakeToCamel = Object.fromEntries(Object.entries(FIELD_MAP).map(([camel, snake]) => [snake, camel]));
+    for (const [snake, msgs] of Object.entries(errs)) {
+        const camel = snakeToCamel[snake] ?? snake;
+        if (camel in errors) {
+            errors[camel] = Array.isArray(msgs) ? String(msgs[0]) : String(msgs);
+            touched[camel] = true;
+        }
+    }
+}
+
 async function saveProduct() {
     submitted.value = true;
     if (!validateAll()) {
@@ -314,42 +351,21 @@ async function saveProduct() {
         return;
     }
     try {
+        const payload = buildPayload();
+
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, {
-                ...product.value,
-                // normaliza fechas a YYYY-MM-DD por si vienen objetos Date
-                fechaAperturaPreg: ymd(product.value.fechaAperturaPreg),
-                fechaCierreDocentePreg: ymd(product.value.fechaCierreDocentePreg),
-                fechaCierreJefeDepart: ymd(product.value.fechaCierreJefeDepart),
-                fechaCierreDecano: ymd(product.value.fechaCierreDecano),
-                fechaAperturaPostg: ymd(product.value.fechaAperturaPostg),
-                fechaCierreDocentePostg: ymd(product.value.fechaCierreDocentePostg),
-                fechaCierreCoordinadorPostg: ymd(product.value.fechaCierreCoordinadorPostg),
-                fechaCierreJefePostg: ymd(product.value.fechaCierreJefePostg)
-            });
+            await axios.patch(`${API}/${product.value.id}`, payload, { headers: { 'Content-Type': 'application/json' } });
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, {
-                ...product.value,
-                fechaAperturaPreg: ymd(product.value.fechaAperturaPreg),
-                fechaCierreDocentePreg: ymd(product.value.fechaCierreDocentePreg),
-                fechaCierreJefeDepart: ymd(product.value.fechaCierreJefeDepart),
-                fechaCierreDecano: ymd(product.value.fechaCierreDecano),
-                fechaAperturaPostg: ymd(product.value.fechaAperturaPostg),
-                fechaCierreDocentePostg: ymd(product.value.fechaCierreDocentePostg),
-                fechaCierreCoordinadorPostg: ymd(product.value.fechaCierreCoordinadorPostg),
-                fechaCierreJefePostg: ymd(product.value.fechaCierreJefePostg)
-            });
+            await axios.post(API, payload, { headers: { 'Content-Type': 'application/json' } });
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
+
         productDialog.value = false;
         await getProducts();
     } catch (e) {
-        if (e?.response?.status === 422 && e.response.data?.errors) {
-            Object.entries(e.response.data.errors).forEach(([f, msgs]) => {
-                errors[f] = Array.isArray(msgs) ? msgs[0] : String(msgs);
-                touched[f] = true;
-            });
+        if (e?.response?.status === 422) {
+            applyServerErrors(e.response.data?.errors || {});
         }
         const detail = e?.response?.data?.message || e?.response?.data?.error || e.message;
         toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: String(detail), life: 5000 });

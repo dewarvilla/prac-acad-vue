@@ -340,9 +340,9 @@ onMounted(() => getProducts());
         >
             <Column selectionMode="multiple" headerStyle="width:3rem" />
             <Column field="id" header="id" sortable style="min-width: 6rem" />
+            <Column field="programaAcademico" header="Programa Académico" sortable style="min-width: 12rem" />
             <Column field="nivelAcademico" header="Nivel Académico" sortable style="min-width: 12rem" />
             <Column field="facultad" header="Facultad" sortable style="min-width: 12rem" />
-            <Column field="programaAcademico" header="Programa Académico" sortable style="min-width: 12rem" />
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
                     <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />

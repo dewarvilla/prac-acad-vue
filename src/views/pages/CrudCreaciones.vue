@@ -159,28 +159,37 @@ async function openDetails() {
     detailsLoading.value = false;
 }
 
-/* ===== CRUD: crear/editar ===== */
+/* =========================
+   CRUD: crear/editar
+   + AutoComplete Programa
+   ========================= */
 const productDialog = ref(false);
 const submitted = ref(false);
 const product = ref({
     id: null,
+    programaAcademico: null, // { id, label, facultad?, nivel_academico? }
     nombrePractica: '',
     recursosNecesarios: '',
-    justificacion: ''
+    justificacion: '',
+    nivelAcademico: null,
+    facultad: null
 });
 
 const errors = reactive({
+    programaAcademico: '',
     nombrePractica: '',
     recursosNecesarios: '',
     justificacion: ''
 });
 const touched = reactive({
+    programaAcademico: false,
     nombrePractica: false,
     recursosNecesarios: false,
     justificacion: false
 });
 
 const rules = {
+    programaAcademico: [(v) => !!v || 'Selecciona un programa académico.'],
     nombrePractica: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
     justificacion: [(v) => !!v || 'Requerido.']
@@ -220,51 +229,145 @@ function resetValidation() {
 function openNew() {
     product.value = {
         id: null,
+        programaAcademico: null,
         nombrePractica: '',
         recursosNecesarios: '',
         justificacion: ''
     };
+    progSugs.value = [];
     resetValidation();
     productDialog.value = true;
 }
 function editProduct(row) {
-    product.value = { ...row };
+    product.value = {
+        id: row.id ?? null,
+        programaAcademico:
+            row.catalogoId || row.catalogo_id
+                ? {
+                      id: row.catalogoId ?? row.catalogo_id,
+                      label: row.programaAcademico ?? row.programa_academico ?? row.programaAcademico ?? 'Programa Académico',
+                      facultad: row.facultad ?? row.facultad_nombre,
+                      nivel_academico: row.nivel_academico ?? row.nivel
+                  }
+                : null,
+        nombrePractica: row.nombrePractica ?? '',
+        recursosNecesarios: row.recursosNecesarios ?? '',
+        justificacion: row.justificacion ?? ''
+    };
     resetValidation();
     productDialog.value = true;
 }
 
+/* ===== AutoComplete Programas (remoto con debounce) ===== */
+const progSugs = ref([]);
+const loadingProgs = ref(false);
+let progTimer = null;
+const PROG_DEBOUNCE = 250;
+
+function normStr(v) {
+    // fuerza string plano
+    if (typeof v === 'string') return v;
+    if (v == null) return '';
+    // evita mandar [object Object]
+    try {
+        return String(v);
+    } catch {
+        return '';
+    }
+}
+
+async function fetchProgramas(query = '') {
+    loadingProgs.value = true;
+    try {
+        const term = normStr(query).trim();
+
+        // arma params SIN q cuando esté vacío
+        const params = { per_page: 20, page: 1 };
+        if (term !== '') params.q = term;
+
+        const { data } = await axios.get(API_CAT, { params });
+        const items = Array.isArray(data) ? data : (data.data ?? []);
+
+        progSugs.value = items.map((p) => ({
+            id: p.id,
+            label: p.programaAcademico ?? p.programa_academico ?? p.label,
+            facultad: p.facultad,
+            nivel_academico: p.nivelAcademico ?? p.nivel_academico
+        }));
+    } catch (e) {
+        toast.add({ severity: 'error', summary: 'Programas', detail: e?.response?.data?.message || e.message, life: 4000 });
+        progSugs.value = [];
+    } finally {
+        loadingProgs.value = false;
+    }
+}
+function onClearPrograma() {
+    product.value.programaAcademico = null;
+    product.value.nivelAcademico = null;
+    product.value.facultad = null;
+    product.value.programaAcademicoTexto = null;
+}
+function onCompleteProgramas(e) {
+    const q = normStr(e?.query).trim();
+    clearTimeout(progTimer);
+    progTimer = setTimeout(() => fetchProgramas(q), PROG_DEBOUNCE);
+}
+function onSelectPrograma(e) {
+    const it = e.value || null;
+    product.value.programaAcademico = it;
+
+    product.value.nivelAcademico = it?.nivel_academico ?? it?.nivelAcademico ?? null;
+    product.value.facultad = it?.facultad ?? null;
+    product.value.programaAcademicoTexto = it?.label ?? it?.programaAcademico ?? null;
+}
+/* ===== Guardar ===== */
+const saving = ref(false);
+
 async function saveProduct() {
+    if (saving.value) return; // evita doble clic
     submitted.value = true;
+
     if (!validateAll()) {
-        toast.add({
-            severity: 'warn',
-            summary: 'Valida el formulario',
-            detail: 'Corrige los campos marcados en rojo.',
-            life: 3000
-        });
+        toast.add({ severity: 'warn', summary: 'Valida el formulario', detail: 'Corrige los campos marcados en rojo.', life: 3000 });
         return;
     }
+
+    const payload = {
+        catalogo_id: product.value.programaAcademico?.id,
+        nombre_practica: product.value.nombrePractica,
+        recursos_necesarios: product.value.recursosNecesarios,
+        justificacion: product.value.justificacion
+    };
+
     try {
+        saving.value = true;
+
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, product.value);
+            await axios.patch(`${API}/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, product.value);
+            await axios.post(API, payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
+
         productDialog.value = false;
         await getProducts({ force: true });
-    } catch (e) {
-        if (e?.response?.status === 422 && e.response.data?.errors) {
-            Object.entries(e.response.data.errors).forEach(([f, msgs]) => {
-                errors[f] = Array.isArray(msgs) ? msgs[0] : String(msgs);
-                touched[f] = true;
-            });
-        }
-        const detail = e?.response?.data?.message || e?.response?.data?.error || e.message;
-        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: String(detail), life: 5000 });
-    } finally {
         submitted.value = false;
+    } catch (e) {
+        const status = e?.response?.status;
+        const data = e?.response?.data;
+        console.error('Error guardando', data || e);
+
+        if (status === 422 && data?.errors) {
+            errors.programaAcademico = data.errors.catalogo_id?.[0] ?? errors.programaAcademico;
+            errors.nombrePractica = data.errors.nombre_practica?.[0] ?? errors.nombrePractica;
+            errors.recursosNecesarios = data.errors.recursos_necesarios?.[0] ?? errors.recursosNecesarios;
+            errors.justificacion = data.errors.justificacion?.[0] ?? errors.justificacion;
+        }
+
+        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: data?.message || e.message, life: 5000 });
+    } finally {
+        saving.value = false;
     }
 }
 
@@ -294,18 +397,7 @@ async function deleteProduct() {
     }
 }
 
-function searchFacultad(event) {
-    setTimeout(() => {
-        if (!event.query.trim().length) {
-            autoFilteredValue.value = [...autoValue.value];
-        } else {
-            autoFilteredValue.value = autoValue.value.filter((country) => {
-                return country.name.toLowerCase().startsWith(event.query.toLowerCase());
-            });
-        }
-    }, 250);
-}
-
+/* ===== Montaje ===== */
 onMounted(() => getProducts());
 </script>
 
@@ -349,10 +441,9 @@ onMounted(() => getProducts());
         >
             <Column selectionMode="multiple" headerStyle="width:3rem" />
             <Column field="id" header="id" sortable style="min-width: 6rem" />
-            <Column field="nombrePractica" header="Nombre Práctica" sortable style="min-width: 12rem" />
-            <Column field="facultad" header="Facultad" sortable style="min-width: 14rem" />
+            <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 12rem" />
             <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem" />
-            <Column field="nivelAcademico" header="Nivel académico" sortable style="min-width: 12rem" />
+            <Column field="estadoPractica" header="Estado de la práctica" sortable style="min-width: 12rem" />
 
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
@@ -371,18 +462,34 @@ onMounted(() => getProducts());
                     <small v-if="showError('nombrePractica')" class="text-red-500">{{ errors.nombrePractica }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
-                    <label for="nivelAcademico">Nivel académico</label>
-                    <Select id="nivelAcademico" v-model="product.nivelAcademico" :options="dropdownNivelAcademico" optionLabel="name" optionValue="code" placeholder="Nivel Académico" fluid />
-                    <small v-if="showError('nivelAcademico')" class="text-red-500">{{ errors.nivelAcademico }}</small>
-                </div>
-                <div class="flex flex-col gap-2">
-                    <label for="facultad">Facultad</label>
-                    <Select id="facultad" v-model="product.facultad" :options="dropdownFacultad" optionLabel="name" optionValue="code" placeholder="Facultad Académica" fluid />
-                    <small v-if="showError('facultad')" class="text-red-500">{{ errors.facultad }}</small>
-                </div>
-                <div class="flex flex-col gap-2">
-                    <label for="programaAcademico">Programa académico</label>
-                    <InputText id="programaAcademico" v-model.trim="product.programaAcademico" :invalid="showError('programaAcademico')" @blur="onBlur('programaAcademico')" fluid />
+                    <label class="font-medium">Programa académico</label>
+                    <AutoComplete
+                        v-model="product.programaAcademico"
+                        :suggestions="progSugs"
+                        optionLabel="label"
+                        placeholder="Escribe para buscar…"
+                        :dropdown="true"
+                        :forceSelection="true"
+                        :loading="loadingProgs"
+                        @complete="onCompleteProgramas"
+                        @update:modelValue="
+                            () => {
+                                touched.programaAcademico = true;
+                                validateField('programaAcademico');
+                            }
+                        "
+                        appendTo="self"
+                        :pt="{
+                            panel: { class: 'w-full max-h-72 overflow-auto' }
+                        }"
+                    >
+                        <template #option="{ option }">
+                            <div class="flex flex-col">
+                                <span class="font-medium">{{ option.label }}</span>
+                                <small v-if="option.facultad || option.nivel_academico" class="text-gray-500"> {{ option.facultad }}<span v-if="option.facultad && option.nivel_academico"> • </span>{{ option.nivel_academico }} </small>
+                            </div>
+                        </template>
+                    </AutoComplete>
                     <small v-if="showError('programaAcademico')" class="text-red-500">{{ errors.programaAcademico }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
@@ -397,8 +504,8 @@ onMounted(() => getProducts());
                 </div>
             </div>
             <template #footer>
-                <Button label="Guardar" icon="pi pi-check" @click="saveProduct" />
-                <Button label="Cancelar" icon="pi pi-times" text @click="productDialog = false" />
+                <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" />
+                <Button type="button" label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="productDialog = false" />
             </template>
         </Dialog>
 
@@ -421,9 +528,16 @@ onMounted(() => getProducts());
                 <div v-for="d in details" :key="d.id" class="mb-3 border p-3 rounded">
                     <div class="font-semibold mb-2">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
                     <div class="grid grid-cols-2 gap-2">
-                        <div><b>Nivel académico:</b> {{ d.nivelAcademico }}</div>
-                        <div><b>Facultad:</b> {{ d.facultad }}</div>
-                        <div><b>Programa:</b> {{ d.programaAcademico }}</div>
+                        <div><b>Nombre Práctica:</b> {{ d.nombrePractica }}</div>
+                        <div>
+                            <b>Programa Académico:</b>
+                            <template v-if="typeof d.programaAcademico === 'string'">
+                                {{ d.programaAcademico }}
+                            </template>
+                            <template v-else>
+                                {{ d.programaAcademico?.label }}
+                            </template>
+                        </div>
                         <div><b>Estado práctica:</b> {{ d.estadoPractica }}</div>
                         <div><b>Estado jefe departamento:</b> {{ d.estadoDepart }}</div>
                         <div><b>Estado consejo facultad:</b> {{ d.estadoConsejoFacultad }}</div>

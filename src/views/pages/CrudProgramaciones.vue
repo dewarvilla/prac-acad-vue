@@ -3,86 +3,12 @@ import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
 import axios from 'axios';
 
-const API = 'http://127.0.0.1:8000/api/v1/programaciones';
+const API = 'http://127.0.0.1:8000/api/v1/creaciones';
 const API_CRE = 'http://127.0.0.1:8000/api/v1/creaciones';
+const API_RUT = 'http://127.0.0.1:8000/api/v1/rutas';
+const API_PAR = 'http://127.0.0.1:8000/api/v1/participantes';
 
 const toast = useToast();
-
-const creaciones = ref([]);
-const loadingCreaciones = ref(false);
-const CRE_PAGE_SIZE = 200;
-
-const creacionInput = ref(null); // opción seleccionada (objeto)
-const creacionSugs = ref([]); // sugerencias remotas
-let creTimer = null;
-const CRE_DEBOUNCE = 250;
-
-async function loadCreaciones() {
-    loadingCreaciones.value = true;
-    try {
-        const { data } = await axios.get(API_CRE, { params: { per_page: CRE_PAGE_SIZE, page: 1 } });
-        const items = Array.isArray(data) ? data : (data.data ?? []);
-        creaciones.value = items.map((c) => ({
-            id: c.id,
-            label: (c.nombrePractica || 'Práctica sin nombre') + (c.programaAcademico ? ` — ${c.programaAcademico}` : ''),
-            nombrePractica: c.nombrePractica
-        }));
-    } catch (e) {
-        const msg = e?.response?.data?.message || e.message;
-        toast.add({ severity: 'error', summary: 'Error al cargar creaciones', detail: String(msg), life: 5000 });
-    } finally {
-        loadingCreaciones.value = false;
-    }
-}
-
-/* ===== Helpers fechas ===== */
-const toLocalDate = (v) => {
-    if (!v) return null;
-    if (v instanceof Date) return v;
-    const s = String(v);
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return new Date(s);
-};
-const ymd = (v) => {
-    if (!v) return '';
-    const d = v instanceof Date ? v : toLocalDate(v);
-    if (!d || isNaN(d.getTime())) return '';
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${dd}`;
-};
-
-async function fetchCreacionesByName(q) {
-    loadingCreaciones.value = true;
-    try {
-        const { data } = await axios.get(API_CRE, {
-            params: { per_page: 20, page: 1, q: q || '' } // el backend filtra por nombre
-        });
-        const items = Array.isArray(data) ? data : (data.data ?? []);
-        creacionSugs.value = items.map((c) => ({
-            id: c.id,
-            label: (c.nombrePractica || 'Práctica sin nombre') + (c.programaAcademico ? ` — ${c.programaAcademico}` : ''),
-            nombrePractica: c.nombrePractica
-        }));
-    } catch (e) {
-        toast.add({ severity: 'error', summary: 'Creaciones', detail: e?.response?.data?.message || e.message, life: 4000 });
-        creacionSugs.value = [];
-    } finally {
-        loadingCreaciones.value = false;
-    }
-}
-function onCompleteCreaciones(e) {
-    const q = (e.query || '').trim();
-    if (creTimer) clearTimeout(creTimer);
-    creTimer = setTimeout(() => fetchCreacionesByName(q), CRE_DEBOUNCE);
-}
-function onSelectCreacion(e) {
-    const it = e.value;
-    product.value.creacionId = it?.id ?? null;
-    product.value.nombrePractica = it?.nombrePractica ?? '';
-}
 
 /* ===== Tabla (server-side) ===== */
 const products = ref([]);
@@ -112,8 +38,9 @@ function buildParams({ force = false } = {}) {
     if (sortParam.value) params.sort = sortParam.value;
 
     const raw = String(search.value || '').trim();
-    if (raw.length > 0 && (force || raw.length >= MIN_CHARS)) params.q = raw;
-
+    if (raw.length > 0 && (force || raw.length >= MIN_CHARS)) {
+        params.q = raw;
+    }
     return params;
 }
 
@@ -151,6 +78,8 @@ async function getProducts(opts = {}) {
 
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
+
+    // evita llamadas innecesarias
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
     if (typingTimer) {
@@ -196,6 +125,7 @@ function buscar() {
     page.value = 1;
     getProducts({ force: true }); // <- clave
 }
+
 function limpiar() {
     search.value = '';
     page.value = 1;
@@ -220,60 +150,51 @@ async function openDetails() {
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
-    if (fails) {
+    if (fails)
         toast.add({
             severity: 'warn',
             summary: 'Algunos detalles fallaron',
             detail: `Fallaron ${fails} de ${results.length}`,
             life: 4000
         });
-    }
     detailsDialog.value = true;
     detailsLoading.value = false;
 }
 
-/* ===== CRUD: crear/editar ===== */
+/* =========================
+   CRUD: crear/editar
+   + AutoComplete Programa
+   ========================= */
 const productDialog = ref(false);
 const submitted = ref(false);
 const product = ref({
     id: null,
-    creacionId: null,
-    nombrePractica: '', // visible solo para el usuario
-    descripcion: '',
-    lugarDeRealizacion: '',
-    justificacion: '',
+    programaAcademico: null, // { id, label, facultad?, nivel_academico? }
+    nombrePractica: '',
     recursosNecesarios: '',
-    requiereTransporte: false,
-    fechaInicio: '',
-    fechaFinalizacion: '',
-    estadoPractica: 'en_aprobacion'
+    justificacion: '',
+    nivelAcademico: null,
+    facultad: null
 });
 
 const errors = reactive({
-    creacionId: '',
-    descripcion: '',
-    lugarDeRealizacion: '',
-    justificacion: '',
+    programaAcademico: '',
+    nombrePractica: '',
     recursosNecesarios: '',
-    requiereTransporte: '',
-    fechaInicio: '',
-    fechaFinalizacion: ''
+    justificacion: ''
 });
-const touched = reactive(Object.fromEntries(Object.keys(errors).map((k) => [k, false])));
+const touched = reactive({
+    programaAcademico: false,
+    nombrePractica: false,
+    recursosNecesarios: false,
+    justificacion: false
+});
 
 const rules = {
-    creacionId: [(v) => !!v || 'Selecciona una práctica creada.'],
-    descripcion: [(v) => !!v || 'Requerido.'],
-    justificacion: [(v) => !!v || 'Requerido.'],
+    programaAcademico: [(v) => !!v || 'Selecciona un programa académico.'],
+    nombrePractica: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
-    fechaInicio: [(v) => !!v || 'Requerida.'],
-    fechaFinalizacion: [
-        (v) => !!v || 'Requerida.',
-        (v) => {
-            if (!v || !product.value.fechaInicio) return true;
-            return new Date(v) >= new Date(product.value.fechaInicio) || 'No puede ser anterior a la fecha de inicio.';
-        }
-    ]
+    justificacion: [(v) => !!v || 'Requerido.']
 };
 
 function validateField(f) {
@@ -310,80 +231,145 @@ function resetValidation() {
 function openNew() {
     product.value = {
         id: null,
-        creacionId: null,
+        programaAcademico: null,
         nombrePractica: '',
-        descripcion: '',
-        lugarDeRealizacion: '',
-        justificacion: '',
         recursosNecesarios: '',
-        requiereTransporte: false,
-        fechaInicio: '',
-        fechaFinalizacion: '',
-        estadoPractica: 'en_aprobacion'
+        justificacion: ''
     };
-    creacionInput.value = null;
+    progSugs.value = [];
     resetValidation();
     productDialog.value = true;
 }
-
-function onPickCreacion(id) {
-    const item = creaciones.value.find((x) => x.id === id);
-    product.value.nombrePractica = item?.nombrePractica ?? '';
-}
-
 function editProduct(row) {
-    product.value.fechaInicio = toLocalDate(row.fechaInicio);
-    product.value.fechaFinalizacion = toLocalDate(row.fechaFinalizacion);
-    product.value = { ...row };
-    product.value.creacionId = row.creacionId ?? row.creacion_id ?? null;
-    product.value.nombrePractica = row.nombrePractica ?? '';
-    // Pre-carga el objeto del AutoComplete si lo tenemos en cache
-    const cached = creaciones.value.find((x) => x.id === product.value.creacionId);
-    creacionInput.value = cached ? { ...cached } : product.value.creacionId ? { id: product.value.creacionId, label: product.value.nombrePractica, nombrePractica: product.value.nombrePractica } : null;
+    product.value = {
+        id: row.id ?? null,
+        programaAcademico:
+            row.catalogoId || row.catalogo_id
+                ? {
+                      id: row.catalogoId ?? row.catalogo_id,
+                      label: row.programaAcademico ?? row.programa_academico ?? row.programaAcademico ?? 'Programa Académico',
+                      facultad: row.facultad ?? row.facultad_nombre,
+                      nivel_academico: row.nivel_academico ?? row.nivel
+                  }
+                : null,
+        nombrePractica: row.nombrePractica ?? '',
+        recursosNecesarios: row.recursosNecesarios ?? '',
+        justificacion: row.justificacion ?? ''
+    };
     resetValidation();
     productDialog.value = true;
 }
+
+/* ===== AutoComplete Programas (remoto con debounce) ===== */
+const progSugs = ref([]);
+const loadingProgs = ref(false);
+let progTimer = null;
+const PROG_DEBOUNCE = 250;
+
+function normStr(v) {
+    // fuerza string plano
+    if (typeof v === 'string') return v;
+    if (v == null) return '';
+    // evita mandar [object Object]
+    try {
+        return String(v);
+    } catch {
+        return '';
+    }
+}
+
+async function fetchProgramas(query = '') {
+    loadingProgs.value = true;
+    try {
+        const term = normStr(query).trim();
+
+        // arma params SIN q cuando esté vacío
+        const params = { per_page: 20, page: 1 };
+        if (term !== '') params.q = term;
+
+        const { data } = await axios.get(API_CAT, { params });
+        const items = Array.isArray(data) ? data : (data.data ?? []);
+
+        progSugs.value = items.map((p) => ({
+            id: p.id,
+            label: p.programaAcademico ?? p.programa_academico ?? p.label,
+            facultad: p.facultad,
+            nivel_academico: p.nivelAcademico ?? p.nivel_academico
+        }));
+    } catch (e) {
+        toast.add({ severity: 'error', summary: 'Programas', detail: e?.response?.data?.message || e.message, life: 4000 });
+        progSugs.value = [];
+    } finally {
+        loadingProgs.value = false;
+    }
+}
+function onClearPrograma() {
+    product.value.programaAcademico = null;
+    product.value.nivelAcademico = null;
+    product.value.facultad = null;
+    product.value.programaAcademicoTexto = null;
+}
+function onCompleteProgramas(e) {
+    const q = normStr(e?.query).trim();
+    clearTimeout(progTimer);
+    progTimer = setTimeout(() => fetchProgramas(q), PROG_DEBOUNCE);
+}
+function onSelectPrograma(e) {
+    const it = e.value || null;
+    product.value.programaAcademico = it;
+
+    product.value.nivelAcademico = it?.nivel_academico ?? it?.nivelAcademico ?? null;
+    product.value.facultad = it?.facultad ?? null;
+    product.value.programaAcademicoTexto = it?.label ?? it?.programaAcademico ?? null;
+}
+/* ===== Guardar ===== */
+const saving = ref(false);
 
 async function saveProduct() {
+    if (saving.value) return; // evita doble clic
     submitted.value = true;
+
     if (!validateAll()) {
         toast.add({ severity: 'warn', summary: 'Valida el formulario', detail: 'Corrige los campos marcados en rojo.', life: 3000 });
         return;
     }
+
+    const payload = {
+        catalogo_id: product.value.programaAcademico?.id,
+        nombre_practica: product.value.nombrePractica,
+        recursos_necesarios: product.value.recursosNecesarios,
+        justificacion: product.value.justificacion
+    };
+
     try {
-        const payload = {
-            creacionId: product.value.creacionId,
-            descripcion: product.value.descripcion,
-            lugarDeRealizacion: product.value.lugarDeRealizacion || null,
-            justificacion: product.value.justificacion,
-            recursosNecesarios: product.value.recursosNecesarios,
-            requiereTransporte: !!product.value.requiereTransporte,
-            fechaInicio: ymd(product.value.fechaInicio),
-            fechaFinalizacion: ymd(product.value.fechaFinalizacion),
-            estadoPractica: product.value.estadoPractica || 'en_aprobacion'
-        };
+        saving.value = true;
 
         if (product.value.id) {
             await axios.patch(`${API}/${product.value.id}`, payload);
-            toast.add({ severity: 'success', summary: 'Programación actualizada', life: 2500 });
+            toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
             await axios.post(API, payload);
-            toast.add({ severity: 'success', summary: 'Programación creada', life: 2500 });
+            toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
 
         productDialog.value = false;
         await getProducts({ force: true });
-    } catch (e) {
-        if (e?.response?.status === 422 && e.response.data?.errors) {
-            Object.entries(e.response.data.errors).forEach(([field, msgs]) => {
-                errors[field] = Array.isArray(msgs) ? msgs[0] : String(msgs);
-                touched[field] = true;
-            });
-        }
-        const detail = e?.response?.data?.message || e?.response?.data?.error || e.message;
-        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: String(detail), life: 5000 });
-    } finally {
         submitted.value = false;
+    } catch (e) {
+        const status = e?.response?.status;
+        const data = e?.response?.data;
+        console.error('Error guardando', data || e);
+
+        if (status === 422 && data?.errors) {
+            errors.programaAcademico = data.errors.catalogo_id?.[0] ?? errors.programaAcademico;
+            errors.nombrePractica = data.errors.nombre_practica?.[0] ?? errors.nombrePractica;
+            errors.recursosNecesarios = data.errors.recursos_necesarios?.[0] ?? errors.recursosNecesarios;
+            errors.justificacion = data.errors.justificacion?.[0] ?? errors.justificacion;
+        }
+
+        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: data?.message || e.message, life: 5000 });
+    } finally {
+        saving.value = false;
     }
 }
 
@@ -414,9 +400,7 @@ async function deleteProduct() {
 }
 
 /* ===== Montaje ===== */
-onMounted(async () => {
-    await Promise.all([loadCreaciones(), getProducts()]);
-});
+onMounted(() => getProducts());
 </script>
 
 <template>
@@ -478,21 +462,37 @@ onMounted(async () => {
         <Dialog v-model:visible="productDialog" header="Programar práctica" :style="{ width: '40rem' }" :modal="true">
             <div class="flex flex-col gap-4">
                 <div class="flex flex-col gap-2">
-                    <label for="creacionId">Práctica (creada)</label>
-                    <Listbox
-                        id="creacionId"
-                        v-model="product.creacionId"
-                        :options="creaciones"
+                    <label class="font-medium">Nombre práctica</label>
+                    <AutoComplete
+                        v-model="product.nombrePractica"
+                        :suggestions="progSugs"
                         optionLabel="label"
-                        optionValue="id"
-                        placeholder="Selecciona o escribe para buscar…"
-                        :loading="loadingCreaciones"
-                        filter
-                        showClear
-                        fluid
-                        @update:modelValue="onPickCreacion"
-                    />
-                    <small v-if="showError('creacionId')" class="text-red-500">{{ errors.creacionId }}</small>
+                        placeholder="Escribe para buscar…"
+                        :dropdown="true"
+                        :forceSelection="true"
+                        :loading="loadingProgs"
+                        @complete="onCompleteProgramas"
+                        @update:modelValue="
+                            () => {
+                                touched.nombrePractica = true;
+                                validateField('nombrePractica');
+                            }
+                        "
+                        appendTo="self"
+                        :pt="{
+                            panel: { class: 'w-full max-h-72 overflow-auto' }
+                        }"
+                    >
+                        <template #option="{ option }">
+                            <div class="flex flex-col">
+                                <span class="font-medium">{{ option.label }}</span>
+                                <small v-if="option.nombrePractica || option.nivel_academico" class="text-gray-500">
+                                    {{ option.nombrePractica }}<span v-if="option.nombrePractica && option.nivel_academico"> • </span>{{ option.nivel_academico }}
+                                </small>
+                            </div>
+                        </template>
+                    </AutoComplete>
+                    <small v-if="showError('programaAcademico')" class="text-red-500">{{ errors.programaAcademico }}</small>
                 </div>
 
                 <div class="flex flex-col gap-2">
