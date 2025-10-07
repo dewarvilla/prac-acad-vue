@@ -92,10 +92,19 @@ function scheduleFetch() {
     }, DEBOUNCE_MS);
 }
 
-/* Dispara solo cuando: ≥ 2 chars */
 watch(search, () => {
     page.value = 1;
-    scheduleFetch();
+    const raw = String(search.value || '').trim();
+    if (raw.length === 0) {
+        if (activeCtrl) {
+            activeCtrl.abort();
+            activeCtrl = null;
+        }
+        if (typingTimer) clearTimeout(typingTimer);
+        getProducts(); // listado completo sin q
+    } else if (raw.length >= MIN_CHARS) {
+        scheduleFetch();
+    }
 });
 
 /* ===== DataTable events ===== */
@@ -111,17 +120,17 @@ function onSort(e) {
     getProducts();
 }
 
-/* ===== Acciones búsqueda ===== */
-function buscar() {
+function forceFetch() {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) {
         activeCtrl.abort();
         activeCtrl = null;
     }
     page.value = 1;
-    getProducts({ force: true }); // fuerza consulta aunque haya 1 char
+    getProducts({ force: true });
 }
-function limpiar() {
+
+function clearSearch() {
     search.value = '';
     page.value = 1;
     if (typingTimer) clearTimeout(typingTimer);
@@ -264,24 +273,18 @@ function resetValidation() {
 // campos de fecha en tu formulario
 const DATE_FIELDS = ['fechaAperturaPreg', 'fechaCierreDocentePreg', 'fechaCierreJefeDepart', 'fechaCierreDecano', 'fechaAperturaPostg', 'fechaCierreDocentePostg', 'fechaCierreCoordinadorPostg', 'fechaCierreJefePostg'];
 
-const toLocalDate = (v) => {
-    if (!v) return null;
-    if (v instanceof Date) return v;
-    const s = String(v);
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return new Date(s);
-};
-
-const ymd = (v) => {
+function ymd(v) {
     if (!v) return '';
-    const d = v instanceof Date ? v : toLocalDate(v);
-    if (!d || isNaN(d.getTime())) return '';
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${dd}`;
-};
+    const d = v instanceof Date ? v : new Date(v);
+    if (isNaN(d.getTime())) return '';
+    const useUTC = typeof v === 'string' && /Z$/i.test(v);
+    const day = useUTC ? d.getUTCDate() : d.getDate();
+    const month = useUTC ? d.getUTCMonth() + 1 : d.getMonth() + 1;
+    const year = useUTC ? d.getUTCFullYear() : d.getFullYear();
+    const dd = String(day).padStart(2, '0');
+    const mm = String(month).padStart(2, '0');
+    return `${dd}/${mm}/${year}`;
+}
 
 function openNew() {
     product.value = {
@@ -385,14 +388,76 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await axios.delete(`${API}/${current.value.id}`);
+
+        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
+
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(1);
     } catch (e) {
-        toast.add({ severity: 'error', summary: 'No se pudo eliminar', detail: String(e?.response?.data?.message || e.message), life: 5000 });
+        toast.add({
+            severity: 'error',
+            summary: 'No se pudo eliminar',
+            detail: String(e?.response?.data?.message || e.message),
+            life: 5000
+        });
     } finally {
         deleteProductDialog.value = false;
         current.value = null;
     }
+}
+// ===== Borrado en lote =====
+const bulkDeleteDialog = ref(false);
+
+function confirmBulkDelete() {
+    if (!selected.value.length) return;
+    bulkDeleteDialog.value = true;
+}
+
+async function bulkDelete() {
+    const ids = selected.value.map((r) => r.id);
+    try {
+        await axios.post(`${API}/bulk-delete`, { ids });
+
+        // Limpieza optimista
+        const set = new Set(ids);
+        products.value = products.value.filter((x) => !set.has(x.id));
+        selected.value = [];
+
+        toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(ids.length);
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede eliminar' : 'Error al eliminar',
+            detail: `[${status ?? 'ERR'}] ${msg}`,
+            life: 6000
+        });
+    } finally {
+        bulkDeleteDialog.value = false;
+    }
+}
+
+function refreshAfterDelete(deletedCount = 1) {
+    // 1) Actualiza el total local
+    total.value = Math.max(0, Number(total.value) - Number(deletedCount));
+
+    // 2) Recalcula total de páginas y corrige si la actual quedó fuera de rango
+    const r = Number(rows.value) || 10;
+    const totalPages = Math.max(1, Math.ceil(total.value / r));
+    if (Number(page.value) > totalPages) {
+        page.value = totalPages;
+    }
+
+    // 3) Recarga la página actual para “rellenar” hasta r filas
+    //    (si hay más ítems disponibles)
+    return getProducts({ force: true });
 }
 
 onMounted(() => getProducts());
@@ -402,18 +467,23 @@ onMounted(() => getProducts());
     <div class="card">
         <Toolbar class="mb-3">
             <template #start>
-                <Button label="Crear" icon="pi pi-plus" class="mr-2" @click="openNew" />
-                <Button label="Borrar" icon="pi pi-trash" class="mr-2" :disabled="!selected.length" @click="selected.length && confirmDeleteProduct(selected[0])" />
-                <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                <div class="flex items-center gap-2 shrink-0">
+                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
+                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                </div>
             </template>
 
+            <template #center />
+
             <template #end>
-                <IconField>
-                    <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                    <InputText v-model.trim="search" placeholder="Escribe para buscar…" style="width: 420px" @keydown.enter.prevent="buscar" />
-                </IconField>
-                <Button label="Buscar" icon="pi pi-search" class="ml-2" @click="buscar" />
-                <Button label="Limpiar" icon="pi pi-times" text class="ml-1" @click="limpiar" />
+                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
+                    <IconField class="w-full">
+                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
+                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                    </IconField>
+                </div>
             </template>
         </Toolbar>
 
@@ -538,7 +608,7 @@ onMounted(() => getProducts());
         <!-- Confirmación de borrado -->
         <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
             <div>
-                ¿Seguro que quieres eliminar la creación <b>Id: {{ current?.id }}</b> — <b>{{ current?.periodo }}</b
+                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.anio }}</b
                 >?
             </div>
             <template #footer>
@@ -547,38 +617,87 @@ onMounted(() => getProducts());
             </template>
         </Dialog>
 
-        <!-- Detalles -->
-        <Dialog v-model:visible="detailsDialog" header="Detalles de creación" :style="{ width: '56vw' }" :modal="true">
+        <!-- Detalles (Fechas) -->
+        <Dialog v-model:visible="detailsDialog" header="Detalles de fechas" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '46vw', maxWidth: '820px' }">
             <div v-if="detailsLoading" class="p-4">Cargando…</div>
-            <div v-else>
-                <div v-for="d in details" :key="d.id" class="mb-3 border p-3 rounded">
-                    <div class="font-semibold mb-2">Id: {{ d.id }} — {{ d.periodo }}</div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div><b>Fecha apertura solicitud programación:</b> {{ ymd(d.fechaAperturaPreg) }}</div>
-                        <div><b>Fecha cierre solicitud programación:</b> {{ ymd(d.fechaCierreDocentePreg) }}</div>
-                        <div><b>Fecha cierre revisión jefe de departamento:</b> {{ ymd(d.fechaCierreJefeDepart) }}</div>
-                        <div><b>Fecha cierre revisión decano:</b> {{ ymd(d.fechaCierreDecano) }}</div>
-                        <div><b>Fecha apertura solicitud postgrados:</b> {{ ymd(d.fechaAperturaPostg) }}</div>
-                        <div><b>Fecha cierre solicitud postgrados:</b> {{ ymd(d.fechaCierreDocentePostg) }}</div>
-                        <div><b>Fecha cierre revisión coordinador postgrados:</b> {{ ymd(d.fechaCierreCoordinadorPostg) }}</div>
-                        <div><b>Fecha cierre revisión jefe postgrados:</b> {{ ymd(d.fechaCierreJefePostg) }}</div>
+
+            <div v-else class="p-3 sm:p-4">
+                <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
+                    <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — Periodo {{ d.periodo }}</div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Apertura (Pregrado)</dt>
+                                <dd>{{ ymd(d.fechaAperturaPreg) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre docente (Pregrado)</dt>
+                                <dd>{{ ymd(d.fechaCierreDocentePreg) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre jefe departamento</dt>
+                                <dd>{{ ymd(d.fechaCierreJefeDepart) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre decano</dt>
+                                <dd>{{ ymd(d.fechaCierreDecano) }}</dd>
+                            </div>
+                        </dl>
+
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Apertura (Postgrado)</dt>
+                                <dd>{{ ymd(d.fechaAperturaPostg) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre docente (Postgrado)</dt>
+                                <dd>{{ ymd(d.fechaCierreDocentePostg) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre coordinador (Postgrado)</dt>
+                                <dd>{{ ymd(d.fechaCierreCoordinadorPostg) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Cierre jefe (Postgrado)</dt>
+                                <dd>{{ ymd(d.fechaCierreJefePostg) }}</dd>
+                            </div>
+                        </dl>
                     </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Creación: {{ d.fechacreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Modificación: {{ d.fechamodificacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Creación: {{ d.ipcreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Modificación: {{ d.ipmodificacion }}</small>
+
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
+                        <div>
+                            <div class="font-semibold">Fecha Creación</div>
+                            <div>{{ d.fechacreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">Fecha Modificación</div>
+                            <div>{{ d.fechamodificacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Creación</div>
+                            <div>{{ d.ipcreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Modificación</div>
+                            <div>{{ d.ipmodificacion }}</div>
+                        </div>
                     </div>
                 </div>
             </div>
+
             <template #footer>
                 <Button label="Cerrar" icon="pi pi-times" text @click="detailsDialog = false" />
+            </template>
+        </Dialog>
+
+        <Dialog v-model:visible="bulkDeleteDialog" header="Confirmar eliminado" :style="{ width: '28rem' }" :modal="true">
+            <div>
+                ¿Seguro que quieres eliminar <b>{{ selected.length }}</b> {{ selected.length === 1 ? 'registro' : 'registros' }}?
+            </div>
+            <template #footer>
+                <Button label="No" icon="pi pi-times" text @click="bulkDeleteDialog = false" />
+                <Button label="Sí" icon="pi pi-check" severity="danger" @click="bulkDelete" />
             </template>
         </Dialog>
     </div>

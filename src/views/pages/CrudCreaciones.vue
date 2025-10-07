@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
 import axios from 'axios';
 
@@ -76,8 +76,6 @@ async function getProducts(opts = {}) {
 
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
-
-    // evita llamadas innecesarias
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
     if (typingTimer) {
@@ -94,10 +92,19 @@ function scheduleFetch() {
     }, DEBOUNCE_MS);
 }
 
-/* Dispara solo cuando: vacío (recargar todo) o ≥ 2 chars */
 watch(search, () => {
     page.value = 1;
-    scheduleFetch();
+    const raw = String(search.value || '').trim();
+    if (raw.length === 0) {
+        if (activeCtrl) {
+            activeCtrl.abort();
+            activeCtrl = null;
+        }
+        if (typingTimer) clearTimeout(typingTimer);
+        getProducts(); // listado completo sin q
+    } else if (raw.length >= MIN_CHARS) {
+        scheduleFetch();
+    }
 });
 
 /* ===== DataTable events ===== */
@@ -112,19 +119,17 @@ function onSort(e) {
     page.value = 1;
     getProducts();
 }
-
-/* ===== Acciones búsqueda ===== */
-function buscar() {
+function forceFetch() {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) {
         activeCtrl.abort();
         activeCtrl = null;
     }
     page.value = 1;
-    getProducts({ force: true }); // <- clave
+    getProducts({ force: true });
 }
 
-function limpiar() {
+function clearSearch() {
     search.value = '';
     page.value = 1;
     if (typingTimer) clearTimeout(typingTimer);
@@ -264,11 +269,32 @@ const loadingProgs = ref(false);
 let progTimer = null;
 const PROG_DEBOUNCE = 250;
 
+// --- Fix de cierre al hacer clic/scroll y para permitir espacios
+let progBlurTimer = null;
+function validateProg() {
+    touched.programaAcademico = true;
+    validateField('programaAcademico');
+}
+function onItemSelectPrograma(e) {
+    onSelectPrograma(e);
+    if (progBlurTimer) clearTimeout(progBlurTimer);
+    validateProg();
+}
+function onBlurPrograma() {
+    if (progBlurTimer) clearTimeout(progBlurTimer);
+    // pequeño delay para no cerrar cuando el clic es dentro del panel
+    progBlurTimer = setTimeout(() => {
+        validateProg();
+        progBlurTimer = null;
+    }, 150);
+}
+function stopSpacePropagation(e) {
+    if (e.code === 'Space') e.stopPropagation();
+}
+
 function normStr(v) {
-    // fuerza string plano
     if (typeof v === 'string') return v;
     if (v == null) return '';
-    // evita mandar [object Object]
     try {
         return String(v);
     } catch {
@@ -281,7 +307,6 @@ async function fetchProgramas(query = '') {
     try {
         const term = normStr(query).trim();
 
-        // arma params SIN q cuando esté vacío
         const params = { per_page: 20, page: 1 };
         if (term !== '') params.q = term;
 
@@ -320,11 +345,12 @@ function onSelectPrograma(e) {
     product.value.facultad = it?.facultad ?? null;
     product.value.programaAcademicoTexto = it?.label ?? it?.programaAcademico ?? null;
 }
+
 /* ===== Guardar ===== */
 const saving = ref(false);
 
 async function saveProduct() {
-    if (saving.value) return; // evita doble clic
+    if (saving.value) return;
     submitted.value = true;
 
     if (!validateAll()) {
@@ -382,8 +408,14 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await axios.delete(`${API}/${current.value.id}`);
+
+        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
+
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(1);
     } catch (e) {
         toast.add({
             severity: 'error',
@@ -396,6 +428,59 @@ async function deleteProduct() {
         current.value = null;
     }
 }
+// ===== Borrado en lote =====
+const bulkDeleteDialog = ref(false);
+
+function confirmBulkDelete() {
+    if (!selected.value.length) return;
+    bulkDeleteDialog.value = true;
+}
+
+async function bulkDelete() {
+    const ids = selected.value.map((r) => r.id);
+    try {
+        await axios.post(`${API}/bulk-delete`, { ids });
+
+        // Limpieza optimista
+        const set = new Set(ids);
+        products.value = products.value.filter((x) => !set.has(x.id));
+        selected.value = [];
+
+        toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(ids.length);
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede eliminar' : 'Error al eliminar',
+            detail: `[${status ?? 'ERR'}] ${msg}`,
+            life: 6000
+        });
+    } finally {
+        bulkDeleteDialog.value = false;
+    }
+}
+
+function refreshAfterDelete(deletedCount = 1) {
+    total.value = Math.max(0, Number(total.value) - Number(deletedCount));
+    const r = Number(rows.value) || 10;
+    const totalPages = Math.max(1, Math.ceil(total.value / r));
+    if (Number(page.value) > totalPages) {
+        page.value = totalPages;
+    }
+    return getProducts({ force: true });
+}
+
+/* ===== Limpieza ===== */
+onBeforeUnmount(() => {
+    if (typingTimer) clearTimeout(typingTimer);
+    if (activeCtrl) activeCtrl.abort();
+    if (progTimer) clearTimeout(progTimer);
+    if (progBlurTimer) clearTimeout(progBlurTimer);
+});
 
 /* ===== Montaje ===== */
 onMounted(() => getProducts());
@@ -405,18 +490,23 @@ onMounted(() => getProducts());
     <div class="card">
         <Toolbar class="mb-3">
             <template #start>
-                <Button label="Crear" icon="pi pi-plus" class="mr-2" @click="openNew" />
-                <Button label="Borrar" icon="pi pi-trash" class="mr-2" :disabled="!selected.length" @click="selected.length && confirmDeleteProduct(selected[0])" />
-                <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                <div class="flex items-center gap-2 shrink-0">
+                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
+                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                </div>
             </template>
 
+            <template #center />
+
             <template #end>
-                <IconField>
-                    <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                    <InputText v-model.trim="search" placeholder="Escribe para buscar…" style="width: 420px" @keydown.enter.prevent="buscar" />
-                </IconField>
-                <Button label="Buscar" icon="pi pi-search" class="ml-2" @click="buscar" />
-                <Button label="Limpiar" icon="pi pi-times" text class="ml-1" @click="limpiar" />
+                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
+                    <IconField class="w-full">
+                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
+                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                    </IconField>
+                </div>
             </template>
         </Toolbar>
 
@@ -461,9 +551,12 @@ onMounted(() => getProducts());
                     <InputText id="nombrePractica" v-model.trim="product.nombrePractica" :invalid="showError('nombrePractica')" @blur="onBlur('nombrePractica')" fluid />
                     <small v-if="showError('nombrePractica')" class="text-red-500">{{ errors.nombrePractica }}</small>
                 </div>
+
                 <div class="flex flex-col gap-2">
-                    <label class="font-medium">Programa académico</label>
+                    <label for="programaAcademico" class="font-medium">Programa académico</label>
+
                     <AutoComplete
+                        inputId="programaAcademico"
                         v-model="product.programaAcademico"
                         :suggestions="progSugs"
                         optionLabel="label"
@@ -472,15 +565,15 @@ onMounted(() => getProducts());
                         :forceSelection="true"
                         :loading="loadingProgs"
                         @complete="onCompleteProgramas"
-                        @update:modelValue="
-                            () => {
-                                touched.programaAcademico = true;
-                                validateField('programaAcademico');
-                            }
-                        "
+                        @item-select="onItemSelectPrograma"
+                        @blur="onBlurPrograma"
                         appendTo="self"
+                        class="w-full"
                         :pt="{
-                            panel: { class: 'w-full max-h-72 overflow-auto' }
+                            root: { class: 'w-full' },
+                            input: { class: 'w-full h-11 text-base' },
+                            dropdownButton: { class: 'h-11' },
+                            panel: { class: 'w-full max-h-80 overflow-auto' }
                         }"
                     >
                         <template #option="{ option }">
@@ -490,19 +583,23 @@ onMounted(() => getProducts());
                             </div>
                         </template>
                     </AutoComplete>
+
                     <small v-if="showError('programaAcademico')" class="text-red-500">{{ errors.programaAcademico }}</small>
                 </div>
+
                 <div class="flex flex-col gap-2">
                     <label for="recursosNecesarios">Recursos necesarios</label>
                     <Textarea id="recursosNecesarios" v-model.trim="product.recursosNecesarios" :invalid="showError('recursosNecesarios')" @blur="onBlur('recursosNecesarios')" fluid />
                     <small v-if="showError('recursosNecesarios')" class="text-red-500">{{ errors.recursosNecesarios }}</small>
                 </div>
+
                 <div class="flex flex-col gap-2">
                     <label for="justificacion">Justificación</label>
                     <Textarea id="justificacion" v-model.trim="product.justificacion" :invalid="showError('justificacion')" @blur="onBlur('justificacion')" fluid />
                     <small v-if="showError('justificacion')" class="text-red-500">{{ errors.justificacion }}</small>
                 </div>
             </div>
+
             <template #footer>
                 <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" />
                 <Button type="button" label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="productDialog = false" />
@@ -512,7 +609,7 @@ onMounted(() => getProducts());
         <!-- Confirmación de borrado -->
         <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
             <div>
-                ¿Seguro que quieres eliminar la creación <b>Id: {{ current?.id }}</b> — <b>{{ current?.nombrePractica }}</b
+                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.anio }}</b
                 >?
             </div>
             <template #footer>
@@ -522,51 +619,100 @@ onMounted(() => getProducts());
         </Dialog>
 
         <!-- Detalles -->
-        <Dialog v-model:visible="detailsDialog" header="Detalles de creación" :style="{ width: '56vw' }" :modal="true">
+        <Dialog v-model:visible="detailsDialog" header="Detalles de creación" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
             <div v-if="detailsLoading" class="p-4">Cargando…</div>
-            <div v-else>
-                <div v-for="d in details" :key="d.id" class="mb-3 border p-3 rounded">
-                    <div class="font-semibold mb-2">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div><b>Nombre Práctica:</b> {{ d.nombrePractica }}</div>
+
+            <div v-else class="p-3 sm:p-4">
+                <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
+                    <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Nombre Práctica</dt>
+                                <dd class="break-words">{{ d.nombrePractica }}</dd>
+                            </div>
+
+                            <div>
+                                <dt class="text-sm font-semibold">Programa Académico</dt>
+                                <dd class="break-words">
+                                    <template v-if="typeof d.programaAcademico === 'string'">
+                                        {{ d.programaAcademico }}
+                                    </template>
+                                    <template v-else>
+                                        {{ d.programaAcademico?.label }}
+                                    </template>
+                                </dd>
+                            </div>
+
+                            <div>
+                                <dt class="text-sm font-semibold">Estado práctica</dt>
+                                <dd class="break-words">{{ d.estadoPractica }}</dd>
+                            </div>
+                        </dl>
+
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Estado jefe departamento</dt>
+                                <dd class="break-words">{{ d.estadoDepart }}</dd>
+                            </div>
+
+                            <div>
+                                <dt class="text-sm font-semibold">Estado consejo facultad</dt>
+                                <dd class="break-words">{{ d.estadoConsejoFacultad }}</dd>
+                            </div>
+
+                            <div>
+                                <dt class="text-sm font-semibold">Estado consejo académico</dt>
+                                <dd class="break-words">{{ d.estadoConsejoAcademico }}</dd>
+                            </div>
+                        </dl>
+                    </div>
+
+                    <div class="mt-4 space-y-3">
                         <div>
-                            <b>Programa Académico:</b>
-                            <template v-if="typeof d.programaAcademico === 'string'">
-                                {{ d.programaAcademico }}
-                            </template>
-                            <template v-else>
-                                {{ d.programaAcademico?.label }}
-                            </template>
+                            <div class="text-sm font-semibold">Recursos necesarios</div>
+                            <div class="whitespace-pre-line break-words">{{ d.recursosNecesarios }}</div>
                         </div>
-                        <div><b>Estado práctica:</b> {{ d.estadoPractica }}</div>
-                        <div><b>Estado jefe departamento:</b> {{ d.estadoDepart }}</div>
-                        <div><b>Estado consejo facultad:</b> {{ d.estadoConsejoFacultad }}</div>
-                        <div><b>Estado consejo académico:</b> {{ d.estadoConsejoAcademico }}</div>
+                        <div>
+                            <div class="text-sm font-semibold">Justificación</div>
+                            <div class="whitespace-pre-line break-words">{{ d.justificacion }}</div>
+                        </div>
                     </div>
-                    <div class="mt-3">
-                        <b>Recursos necesarios:</b>
-                        <div class="whitespace-pre-line">{{ d.recursosNecesarios }}</div>
-                    </div>
-                    <div class="mt-2">
-                        <b>Justificación:</b>
-                        <div class="whitespace-pre-line">{{ d.justificacion }}</div>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Creación: {{ d.fechacreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Modificación: {{ d.fechamodificacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Creación: {{ d.ipcreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Modificación: {{ d.ipmodificacion }}</small>
+
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
+                        <div>
+                            <div class="font-semibold">Fecha Creación</div>
+                            <div>{{ d.fechacreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">Fecha Modificación</div>
+                            <div>{{ d.fechamodificacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Creación</div>
+                            <div>{{ d.ipcreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Modificación</div>
+                            <div>{{ d.ipmodificacion }}</div>
+                        </div>
                     </div>
                 </div>
             </div>
+
             <template #footer>
                 <Button label="Cerrar" icon="pi pi-times" text @click="detailsDialog = false" />
+            </template>
+        </Dialog>
+
+        <Dialog v-model:visible="bulkDeleteDialog" header="Confirmar eliminado" :style="{ width: '28rem' }" :modal="true">
+            <div>
+                ¿Seguro que quieres eliminar <b>{{ selected.length }}</b> {{ selected.length === 1 ? 'registro' : 'registros' }}?
+            </div>
+            <template #footer>
+                <Button label="No" icon="pi pi-times" text @click="bulkDeleteDialog = false" />
+                <Button label="Sí" icon="pi pi-check" severity="danger" @click="bulkDelete" />
             </template>
         </Dialog>
     </div>

@@ -74,8 +74,6 @@ async function getProducts(opts = {}) {
 
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
-
-    // evita llamadas innecesarias
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
     if (typingTimer) {
@@ -95,8 +93,39 @@ function scheduleFetch() {
 /* Dispara solo cuando: vacío (recargar todo) o ≥ 2 chars */
 watch(search, () => {
     page.value = 1;
-    scheduleFetch();
+    // si está vacío, recarga todo; si no, usar debounce
+    if (String(search.value || '').trim().length === 0) {
+        if (activeCtrl) {
+            activeCtrl.abort();
+            activeCtrl = null;
+        }
+        if (typingTimer) clearTimeout(typingTimer);
+        getProducts(); // listado completo
+    } else {
+        scheduleFetch();
+    }
 });
+
+/* ===== Acciones rápidas ===== */
+function forceFetch() {
+    if (typingTimer) clearTimeout(typingTimer);
+    if (activeCtrl) {
+        activeCtrl.abort();
+        activeCtrl = null;
+    }
+    page.value = 1;
+    getProducts({ force: true });
+}
+function clearSearch() {
+    search.value = '';
+    page.value = 1;
+    if (typingTimer) clearTimeout(typingTimer);
+    if (activeCtrl) {
+        activeCtrl.abort();
+        activeCtrl = null;
+    }
+    getProducts(); // sin q -> listado completo
+}
 
 /* ===== DataTable events ===== */
 function onPage(e) {
@@ -109,28 +138,6 @@ function onSort(e) {
     sortOrder.value = e.sortOrder;
     page.value = 1;
     getProducts();
-}
-
-/* ===== Acciones búsqueda ===== */
-function buscar() {
-    if (typingTimer) clearTimeout(typingTimer);
-    if (activeCtrl) {
-        activeCtrl.abort();
-        activeCtrl = null;
-    }
-    page.value = 1;
-    getProducts({ force: true }); // <- clave
-}
-
-function limpiar() {
-    search.value = '';
-    page.value = 1;
-    if (typingTimer) clearTimeout(typingTimer);
-    if (activeCtrl) {
-        activeCtrl.abort();
-        activeCtrl = null;
-    }
-    getProducts(); // sin q -> listado completo
 }
 
 /* ===== Detalles ===== */
@@ -277,8 +284,14 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await axios.delete(`${API}/${current.value.id}`);
+
+        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
+
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(1);
     } catch (e) {
         toast.add({
             severity: 'error',
@@ -290,6 +303,51 @@ async function deleteProduct() {
         deleteProductDialog.value = false;
         current.value = null;
     }
+}
+// ===== Borrado en lote =====
+const bulkDeleteDialog = ref(false);
+
+function confirmBulkDelete() {
+    if (!selected.value.length) return;
+    bulkDeleteDialog.value = true;
+}
+
+async function bulkDelete() {
+    const ids = selected.value.map((r) => r.id);
+    try {
+        await axios.post(`${API}/bulk-delete`, { ids });
+
+        // Limpieza optimista
+        const set = new Set(ids);
+        products.value = products.value.filter((x) => !set.has(x.id));
+        selected.value = [];
+
+        toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
+
+        // 🔁 Refill de la página
+        await refreshAfterDelete(ids.length);
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede eliminar' : 'Error al eliminar',
+            detail: `[${status ?? 'ERR'}] ${msg}`,
+            life: 6000
+        });
+    } finally {
+        bulkDeleteDialog.value = false;
+    }
+}
+
+function refreshAfterDelete(deletedCount = 1) {
+    total.value = Math.max(0, Number(total.value) - Number(deletedCount));
+    const r = Number(rows.value) || 10;
+    const totalPages = Math.max(1, Math.ceil(total.value / r));
+    if (Number(page.value) > totalPages) {
+        page.value = totalPages;
+    }
+    return getProducts({ force: true });
 }
 
 const dropdownNivelAcademico = ref([
@@ -304,18 +362,24 @@ onMounted(() => getProducts());
     <div class="card">
         <Toolbar class="mb-3">
             <template #start>
-                <Button label="Crear" icon="pi pi-plus" class="mr-2" @click="openNew" />
-                <Button label="Borrar" icon="pi pi-trash" class="mr-2" :disabled="!selected.length" @click="selected.length && confirmDeleteProduct(selected[0])" />
-                <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                <div class="flex items-center gap-2 shrink-0">
+                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
+                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                </div>
             </template>
 
+            <template #center />
+
             <template #end>
-                <IconField>
-                    <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                    <InputText v-model.trim="search" placeholder="Escribe para buscar…" style="width: 420px" @keydown.enter.prevent="buscar" />
-                </IconField>
-                <Button label="Buscar" icon="pi pi-search" class="ml-2" @click="buscar" />
-                <Button label="Limpiar" icon="pi pi-times" text class="ml-1" @click="limpiar" />
+                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
+                    <IconField class="w-full">
+                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
+                        <!-- limpiar dentro del campo -->
+                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                    </IconField>
+                </div>
             </template>
         </Toolbar>
 
@@ -388,33 +452,67 @@ onMounted(() => getProducts());
             </template>
         </Dialog>
 
-        <!-- Detalles -->
-        <Dialog v-model:visible="detailsDialog" header="Detalles de salario" :style="{ width: '56vw' }" :modal="true">
+        <!-- Detalles (Catálogos) -->
+        <Dialog v-model:visible="detailsDialog" header="Detalles de catálogo" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
             <div v-if="detailsLoading" class="p-4">Cargando…</div>
-            <div v-else>
-                <div v-for="d in details" :key="d.id" class="mb-3 border p-3 rounded">
-                    <div class="font-semibold mb-2">Id: {{ d.id }} — {{ d.programaAcademico }}</div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div><b>Facultad:</b> {{ d.facultad }}</div>
-                        <div><b>Programa Académico:</b> {{ d.programaAcademico }}</div>
-                        <div><b>Nivel Académico:</b> {{ d.nivelAcademico }}</div>
+
+            <div v-else class="p-3 sm:p-4">
+                <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
+                    <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — {{ d.programaAcademico }}</div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Facultad</dt>
+                                <dd class="break-words">{{ d.facultad }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">Programa Académico</dt>
+                                <dd class="break-words">{{ d.programaAcademico }}</dd>
+                            </div>
+                        </dl>
+
+                        <dl class="space-y-2">
+                            <div>
+                                <dt class="text-sm font-semibold">Nivel Académico</dt>
+                                <dd class="break-words">{{ d.nivelAcademico }}</dd>
+                            </div>
+                        </dl>
                     </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Creación: {{ d.fechacreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">Fecha Modificación: {{ d.fechamodificacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Creación: {{ d.ipcreacion }}</small>
-                    </div>
-                    <div>
-                        <small class="text-gray-500">IP Modificación: {{ d.ipmodificacion }}</small>
+
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
+                        <div>
+                            <div class="font-semibold">Fecha Creación</div>
+                            <div>{{ d.fechacreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">Fecha Modificación</div>
+                            <div>{{ d.fechamodificacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Creación</div>
+                            <div>{{ d.ipcreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Modificación</div>
+                            <div>{{ d.ipmodificacion }}</div>
+                        </div>
                     </div>
                 </div>
             </div>
+
             <template #footer>
                 <Button label="Cerrar" icon="pi pi-times" text @click="detailsDialog = false" />
+            </template>
+        </Dialog>
+
+        <Dialog v-model:visible="bulkDeleteDialog" header="Confirmar eliminado" :style="{ width: '28rem' }" :modal="true">
+            <div>
+                ¿Seguro que quieres eliminar <b>{{ selected.length }}</b> {{ selected.length === 1 ? 'registro' : 'registros' }}?
+            </div>
+            <template #footer>
+                <Button label="No" icon="pi pi-times" text @click="bulkDeleteDialog = false" />
+                <Button label="Sí" icon="pi pi-check" severity="danger" @click="bulkDelete" />
             </template>
         </Dialog>
     </div>

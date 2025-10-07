@@ -2,7 +2,7 @@
 
 <template>
     <div class="layout-footer">
-        SAKAI by
-        <a href="https://primevue.org" target="_blank" rel="noopener noreferrer" class="text-primary font-bold hover:underline">PrimeVue</a>
+        Prácticas académicas by
+        <a href="https://www.unicordoba.edu.co" target="_blank" rel="noopener noreferrer" class="text-primary font-bold hover:underline">Unicordoba</a>
     </div>
 </template>
