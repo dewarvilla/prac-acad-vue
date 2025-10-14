@@ -1,23 +1,32 @@
-node_modules
-coverage
-*.log*
-.nuxt
-.nitro
-.cache
-.output
-.env
-dist
-.DS_Store
-.idea
-.eslintcache
-api-generator/typedoc.json
-**/.DS_Store
+# Dependencias y builds
 node_modules/
 dist/
 build/
+.output/
+.cache/
+coverage/
+.nitro/
+.nuxt/
+
+# Logs
+*.log*
+.eslintcache
+
+# Archivos temporales del sistema
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# Archivos de entorno
 .env
 .env.*
 !.env.example
+.env.local
+.env.*.local
+
+# IDEs
 .vscode/
 .idea/
-*.log
+
+# Otros
+api-generator/typedoc.json
