@@ -1,14 +1,58 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
-import { useToast } from 'primevue/usetoast';
 import axios from 'axios';
-import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
+import { useToast } from 'primevue/usetoast';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
+/* ================================
+   Config / axios
+================================ */
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api/v1';
 const API_PROG = `${API_BASE}/programaciones`;
 const API_CRE = `${API_BASE}/creaciones`;
+const GMAPS_KEY = window.GOOGLE_MAPS_API_KEY || import.meta.env.VITE_GMAPS_KEY || '';
 
+const api = axios.create({
+    baseURL: API_BASE,
+    timeout: 20000
+});
+
+// toast
 const toast = useToast();
+
+/* ================================
+   Loader único de Google Maps JS
+================================ */
+let gmapsLoadPromise = null;
+function loadGmaps() {
+    if (window.google?.maps) return Promise.resolve(window.google.maps);
+    if (gmapsLoadPromise) return gmapsLoadPromise;
+    if (!GMAPS_KEY) {
+        return Promise.reject(new Error('Falta la API key de Google Maps (VITE_GMAPS_KEY o window.GOOGLE_MAPS_API_KEY).'));
+    }
+    gmapsLoadPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = `https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=places,geometry&v=weekly`;
+        s.async = true;
+        s.defer = true;
+        s.onload = () => resolve(window.google.maps);
+        s.onerror = () => reject(new Error('No fue posible cargar Google Maps. Revisa restricciones de la key (HTTP referrers) y que Maps JavaScript API esté habilitada.'));
+        document.head.appendChild(s);
+    });
+    return gmapsLoadPromise;
+}
+
+/* Al abrir el picker, garantizamos que Maps esté listo */
+const routeDlg = ref(false);
+watch(routeDlg, async (open) => {
+    if (!open) return;
+    try {
+        await loadGmaps();
+    } catch (e) {
+        toast.add({ severity: 'error', summary: 'Rutas', detail: e.message, life: 6000 });
+        // si no carga, cerramos el diálogo para no dejarlo roto
+        routeDlg.value = false;
+    }
+});
 
 /* ===== Tabla (server-side) ===== */
 const rows = ref(10);
@@ -42,7 +86,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API_PROG, { params: buildParams({ force }), signal });
+        const { data } = await api.get('/programaciones', { params: buildParams({ force }), signal });
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -57,7 +101,7 @@ async function getProducts(opts = {}) {
         if (!canceled) {
             const status = e?.response?.status;
             const msg = e?.response?.data?.message || e.message;
-            toast.add({ severity: 'error', summary: 'Error al cargar', detail: `[${status}] ${msg}`, life: 6000 });
+            toast.add({ severity: 'error', summary: 'Error al cargar', detail: `[${status ?? 'ERR'}] ${msg}`, life: 6000 });
             products.value = [];
             total.value = 0;
         }
@@ -136,7 +180,7 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    const reqs = selected.value.map((r) => axios.get(`${API_PROG}/${r.id}`));
+    const reqs = selected.value.map((r) => api.get(`/programaciones/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -147,7 +191,7 @@ async function openDetails() {
 
 /* =========================
    CRUD crear/editar
-   ========================= */
+========================= */
 const productDialog = ref(false);
 const saving = ref(false);
 const product = ref({
@@ -165,7 +209,6 @@ const product = ref({
 
 /* ==== Recorridos dentro del modal ==== */
 const routesDraft = ref([]); // {id?, ...payload, _state?: 'new'|'keep'|'delete'}
-const routeDlg = ref(false);
 
 function fmtKm(m) {
     if (m == null) return '—';
@@ -267,7 +310,7 @@ async function editProduct(row) {
 
     // Cargar recorridos existentes (se marcan 'keep')
     try {
-        const { data } = await axios.get(`${API_BASE}/programaciones/${row.id}/rutas`);
+        const { data } = await api.get(`/programaciones/${row.id}/rutas`);
         const items = data?.data ?? data ?? [];
         routesDraft.value = items.map((it) => ({
             id: it.id,
@@ -311,7 +354,7 @@ async function fetchCreaciones(q = '') {
     try {
         const params = { per_page: 20, page: 1 };
         if (q.trim() !== '') params.q = q.trim();
-        const { data } = await axios.get(API_CRE, { params });
+        const { data } = await api.get('/creaciones', { params });
         const items = Array.isArray(data) ? data : (data.data ?? []);
         progSugs.value = items.map((c) => ({
             id: c.id,
@@ -338,6 +381,28 @@ function onSelectCreacion(e) {
     product.value.nombrePractica = it?.label ?? '';
 }
 
+/* =========================
+   Post-acciones ruta (BE)
+========================= */
+async function calcularYPeajes(rutaId, categoria /* 'I'..'VII' o null */) {
+    try {
+        await api.post(`/rutas/${rutaId}/calcular`);
+    } catch (e) {
+        toast.add({ severity: 'warn', summary: 'Cálculo de ruta', detail: e?.response?.data?.message || e.message, life: 5000 });
+    }
+    try {
+        await api.post(`/rutas/${rutaId}/peajes/recalcular`);
+    } catch (e) {
+        toast.add({ severity: 'warn', summary: 'Peajes', detail: e?.response?.data?.message || e.message, life: 5000 });
+    }
+    try {
+        if (categoria) await api.post(`/rutas/${rutaId}/peajes/total`, { cat: categoria });
+        else await api.post(`/rutas/${rutaId}/peajes/total`);
+    } catch {
+        /* opcional; no bloquea UX */
+    }
+}
+
 /* ===== Guardar ===== */
 async function saveProduct() {
     if (saving.value) return;
@@ -362,39 +427,52 @@ async function saveProduct() {
 
         if (product.value.id) {
             // EDITAR
-            await axios.patch(`${API_PROG}/${product.value.id}`, payload);
+            await api.patch(`/programaciones/${product.value.id}`, payload);
 
             const progId = product.value.id;
             const toCreate = routesDraft.value.filter((r) => r._state === 'new');
             const toDelete = routesDraft.value.filter((r) => r._state === 'delete' && r.id);
 
+            const createdIds = [];
             const reqs = [];
+
             toCreate.forEach((r) => {
                 const p = { ...r, programacion_id: progId };
                 delete p._state;
                 delete p.id;
-                reqs.push(axios.post(`${API_BASE}/programaciones/${progId}/rutas`, p));
+                reqs.push(
+                    api.post(`/programaciones/${progId}/rutas`, p).then((res) => {
+                        const ruta = res?.data?.data ?? res?.data;
+                        if (ruta?.id) createdIds.push(ruta.id);
+                    })
+                );
             });
-            toDelete.forEach((r) => {
-                reqs.push(axios.delete(`${API_BASE}/programaciones/${progId}/rutas/${r.id}`));
-            });
+            toDelete.forEach((r) => reqs.push(api.delete(`/programaciones/${progId}/rutas/${r.id}`)));
+
             if (reqs.length) await Promise.allSettled(reqs);
+
+            // cálculo + peajes en segundo plano
+            createdIds.forEach((rid) => calcularYPeajes(rid, null));
 
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
             // CREAR
-            const { data } = await axios.post(API_PROG, payload);
+            const { data } = await api.post('/programaciones', payload);
             const created = data?.data ?? data ?? {};
             const progId = created.id;
 
             if (progId && routesDraft.value.length) {
-                const reqs = routesDraft.value.map((r) => {
+                const createdIds = [];
+                const reqs = routesDraft.value.map(async (r) => {
                     const p = { ...r, programacion_id: progId };
                     delete p._state;
                     delete p.id;
-                    return axios.post(`${API_BASE}/programaciones/${progId}/rutas`, p);
+                    const res = await api.post(`/programaciones/${progId}/rutas`, p);
+                    const ruta = res?.data?.data ?? res?.data;
+                    if (ruta?.id) createdIds.push(ruta.id);
                 });
                 await Promise.allSettled(reqs);
+                createdIds.forEach((rid) => calcularYPeajes(rid, null));
             }
 
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
@@ -427,7 +505,7 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API_PROG}/${current.value.id}`);
+        await api.delete(`/programaciones/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
         await refreshAfterDelete(1);
@@ -447,7 +525,7 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API_PROG}/bulk-delete`, { ids });
+        await api.post('/programaciones/bulk-delete', { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
@@ -491,243 +569,3 @@ function fmtDDMMYYYY(v) {
 
 onMounted(() => getProducts());
 </script>
-
-<template>
-    <div class="card">
-        <Toolbar class="mb-3">
-            <template #start>
-                <div class="flex items-center gap-2 shrink-0">
-                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
-                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
-                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
-                </div>
-            </template>
-            <template #end>
-                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
-                    <IconField class="w-full">
-                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
-                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
-                    </IconField>
-                </div>
-            </template>
-        </Toolbar>
-
-        <DataTable
-            :value="products"
-            dataKey="id"
-            v-model:selection="selected"
-            selectionMode="multiple"
-            :loading="loading"
-            :lazy="true"
-            :paginator="true"
-            :rows="Number(rows)"
-            :totalRecords="Number(total)"
-            :first="(Number(page) - 1) * Number(rows)"
-            :sortField="sortField"
-            :sortOrder="sortOrder"
-            @page="onPage"
-            @sort="onSort"
-            :rowsPerPageOptions="[5, 10, 25, 50]"
-            currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
-            emptyMessage="No hay registros"
-        >
-            <Column selectionMode="multiple" headerStyle="width:3rem" />
-            <Column field="id" header="id" sortable style="min-width: 6rem" />
-            <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 14rem" />
-            <Column field="estadoPractica" header="Estado" sortable style="min-width: 10rem" />
-            <Column field="fechaInicio" header="Inicio" sortable style="min-width: 10rem">
-                <template #body="{ data }">{{ fmtDDMMYYYY(data.fechaInicio) }}</template>
-            </Column>
-            <Column field="fechaFinalizacion" header="Fin" sortable style="min-width: 10rem">
-                <template #body="{ data }">{{ fmtDDMMYYYY(data.fechaFinalizacion) }}</template>
-            </Column>
-
-            <!-- Acciones (sin botón Recorridos) -->
-            <Column :exportable="false" headerStyle="width:9rem">
-                <template #body="{ data }">
-                    <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
-                    <Button icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
-                </template>
-            </Column>
-        </DataTable>
-
-        <!-- Crear/Editar -->
-        <Dialog v-model:visible="productDialog" header="Programación de práctica" :style="{ width: '42rem' }" :modal="true">
-            <div class="flex flex-col gap-4">
-                <div class="flex flex-col gap-2">
-                    <label for="creacion" class="font-medium">Nombre Práctica</label>
-                    <AutoComplete
-                        inputId="creacion"
-                        v-model="product.creacion"
-                        :suggestions="progSugs"
-                        optionLabel="label"
-                        placeholder="Escribe para buscar…"
-                        :dropdown="true"
-                        :forceSelection="true"
-                        :loading="loadingProgs"
-                        @complete="onCompleteCreaciones"
-                        @item-select="onSelectCreacion"
-                        appendTo="self"
-                        class="w-full"
-                        :pt="{ root: { class: 'w-full' }, input: { class: 'w-full h-11 text-base' }, dropdownButton: { class: 'h-11' }, panel: { class: 'w-full max-h-80 overflow-auto' } }"
-                    >
-                        <template #option="{ option }">
-                            <div class="flex flex-col">
-                                <span class="font-medium">{{ option.label }}</span>
-                                <small class="text-gray-500">{{ option.programa }}<span v-if="option.facultad"> • </span>{{ option.facultad }}</small>
-                            </div>
-                        </template>
-                    </AutoComplete>
-                    <small v-if="showError('creacion')" class="text-red-500">{{ errors.creacion }}</small>
-                </div>
-
-                <div class="flex flex-col gap-2">
-                    <label for="descripcion">Descripción</label>
-                    <Textarea id="descripcion" v-model.trim="product.descripcion" autoResize fluid />
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div class="flex items-center gap-2">
-                        <Checkbox binary v-model="product.requiereTransporte" inputId="reqTrans" />
-                        <label for="reqTrans">Requiere transporte</label>
-                    </div>
-                    <div class="flex flex-col gap-2">
-                        <label for="lugar">Lugar de realización</label>
-                        <InputText id="lugar" v-model.trim="product.lugarDeRealizacion" fluid />
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div class="flex flex-col gap-2">
-                        <label for="fechaInicio">Fecha inicio</label>
-                        <InputText id="fechaInicio" type="date" v-model="product.fechaInicio" :invalid="showError('fechaInicio')" @blur="onBlur('fechaInicio')" />
-                        <small v-if="showError('fechaInicio')" class="text-red-500">{{ errors.fechaInicio }}</small>
-                    </div>
-                    <div class="flex flex-col gap-2">
-                        <label for="fechaFin">Fecha finalización</label>
-                        <InputText id="fechaFin" type="date" v-model="product.fechaFinalizacion" :invalid="showError('fechaFinalizacion')" @blur="onBlur('fechaFinalizacion')" />
-                        <small v-if="showError('fechaFinalizacion')" class="text-red-500">{{ errors.fechaFinalizacion }}</small>
-                    </div>
-                </div>
-
-                <div class="flex flex-col gap-2">
-                    <label for="recursos">Recursos necesarios</label>
-                    <Textarea id="recursos" v-model.trim="product.recursosNecesarios" :invalid="showError('recursosNecesarios')" @blur="onBlur('recursosNecesarios')" />
-                    <small v-if="showError('recursosNecesarios')" class="text-red-500">{{ errors.recursosNecesarios }}</small>
-                </div>
-
-                <div class="flex flex-col gap-2">
-                    <label for="justificacion">Justificación</label>
-                    <Textarea id="justificacion" v-model.trim="product.justificacion" :invalid="showError('justificacion')" @blur="onBlur('justificacion')" />
-                    <small v-if="showError('justificacion')" class="text-red-500">{{ errors.justificacion }}</small>
-                </div>
-
-                <!-- Recorridos (definición dentro del modal) -->
-                <div class="mt-2">
-                    <div class="flex items-center justify-between mb-2">
-                        <label class="font-medium">Recorridos</label>
-                        <Button size="small" icon="pi pi-plus" label="Añadir recorrido" @click="routeDlg = true" />
-                    </div>
-
-                    <div v-if="!visibleRoutes().length" class="text-gray-500 text-sm">No hay recorridos definidos. Añade al menos uno si lo requiere la práctica.</div>
-
-                    <div v-else class="space-y-2">
-                        <div v-for="(r, idx) in visibleRoutes()" :key="idx" class="border rounded p-2">
-                            <div class="flex items-center justify-between">
-                                <div class="text-sm">
-                                    <div><b>Origen:</b> {{ r.origen_desc || (r.origen_lat ? r.origen_lat + ', ' + r.origen_lng : '—') }}</div>
-                                    <div><b>Destino:</b> {{ r.destino_desc || (r.destino_lat ? r.destino_lat + ', ' + r.destino_lng : '—') }}</div>
-                                    <div class="text-xs text-gray-600">Distancia: {{ fmtKm(r.distancia_m) }} • Duración: {{ fmtMin(r.duracion_s) }}</div>
-                                    <div class="mt-1"><b>Justificación:</b> {{ r.justificacion }}</div>
-                                </div>
-                                <Button icon="pi pi-times" text severity="danger" @click="removeDraftRoute(routesDraft.indexOf(r))" />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Picker de rutas en modo diferido -->
-                <RoutePickerDialog v-model:visible="routeDlg" deferred @picked="addDraftRoute" />
-            </div>
-
-            <template #footer>
-                <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" />
-                <Button type="button" label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="productDialog = false" />
-            </template>
-        </Dialog>
-
-        <!-- Confirmar eliminar -->
-        <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
-            <div>
-                ¿Seguro que quieres eliminar la programación <b>Id:{{ current?.id }}</b> — <b>{{ current?.nombrePractica }}</b
-                >?
-            </div>
-            <template #footer>
-                <Button label="No" icon="pi pi-times" text @click="deleteProductDialog = false" />
-                <Button label="Sí" icon="pi pi-check" severity="danger" @click="deleteProduct" />
-            </template>
-        </Dialog>
-
-        <!-- Detalles -->
-        <Dialog v-model:visible="detailsDialog" header="Detalles de programación" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
-            <div v-if="detailsLoading" class="p-4">Cargando…</div>
-            <div v-else class="p-3 sm:p-4">
-                <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
-                    <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <dl class="space-y-2">
-                            <div>
-                                <dt class="text-sm font-semibold">Programa</dt>
-                                <dd>{{ d.programaAcademico }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-sm font-semibold">Estado</dt>
-                                <dd>{{ d.estadoPractica }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-sm font-semibold">Fechas</dt>
-                                <dd class="break-words">{{ fmtDDMMYYYY(d.fechaInicio) }} → {{ fmtDDMMYYYY(d.fechaFinalizacion) }}</dd>
-                            </div>
-                        </dl>
-                        <dl class="space-y-2">
-                            <div>
-                                <dt class="text-sm font-semibold">Transporte</dt>
-                                <dd>{{ d.requiereTransporte ? 'Sí' : 'No' }}</dd>
-                            </div>
-                            <div>
-                                <dt class="text-sm font-semibold">Lugar</dt>
-                                <dd>{{ d.lugarDeRealizacion || '—' }}</dd>
-                            </div>
-                        </dl>
-                    </div>
-                    <div class="mt-4 space-y-3">
-                        <div>
-                            <div class="text-sm font-semibold">Recursos necesarios</div>
-                            <div class="whitespace-pre-line break-words">{{ d.recursosNecesarios }}</div>
-                        </div>
-                        <div>
-                            <div class="text-sm font-semibold">Justificación</div>
-                            <div class="whitespace-pre-line break-words">{{ d.justificacion }}</div>
-                        </div>
-                        <div v-if="d.descripcion">
-                            <div class="text-sm font-semibold">Descripción</div>
-                            <div class="whitespace-pre-line break-words">{{ d.descripcion }}</div>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
-                        <div>
-                            <div class="font-semibold">Creado</div>
-                            <div>{{ d.fechacreacion }}</div>
-                        </div>
-                        <div>
-                            <div class="font-semibold">Modificado</div>
-                            <div>{{ d.fechamodificacion }}</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <template #footer><Button label="Cerrar" icon="pi pi-times" text @click="detailsDialog = false" /></template>
-        </Dialog>
-    </div>
-</template>

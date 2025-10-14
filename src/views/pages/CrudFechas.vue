@@ -1,7 +1,7 @@
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'; // <- añadí watch
-import { useToast } from 'primevue/usetoast';
 import axios from 'axios';
+import { useToast } from 'primevue/usetoast';
+import { computed, onMounted, reactive, ref, watch } from 'vue'; // <- añadí watch
 
 const API = 'http://127.0.0.1:8000/api/v1/fechas';
 const toast = useToast();
@@ -283,7 +283,7 @@ function ymd(v) {
     const year = useUTC ? d.getUTCFullYear() : d.getFullYear();
     const dd = String(day).padStart(2, '0');
     const mm = String(month).padStart(2, '0');
-    return `${dd}/${mm}/${year}`;
+    return `${year}-${mm}-${dd}`;
 }
 
 function openNew() {
