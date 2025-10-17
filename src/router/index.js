@@ -128,6 +128,11 @@ const router = createRouter({
                     path: '/documentation',
                     name: 'documentation',
                     component: () => import('@/views/pages/Documentation.vue')
+                },
+                {
+                    path: '/mapa',
+                    name: 'mapa',
+                    component: () => import('@/views/MapView.vue')
                 }
             ]
         },
