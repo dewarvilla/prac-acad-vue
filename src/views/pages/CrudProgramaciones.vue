@@ -7,6 +7,10 @@ import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
 /* ========= Cache/ayudas para métricas de rutas en Detalles ========= */
 const routeEstimates = reactive({}); // { [key]: { loading?, error?, distance_m?, duration_s? } }
 
+const uid = Math.random().toString(36).slice(2);
+const recId = `recursos-${uid}`;
+const jusId = `justificacion-${uid}`;
+
 /** Clave estable por ruta (incluye coords para evitar colisiones si no hay id) */
 function kRoute(prog, r, i) {
     const oLat = Number(r?.origen_lat),
@@ -166,6 +170,95 @@ watch(search, () => {
         scheduleFetch();
     }
 });
+// ==== Autocomplete liviano de CREACIONES====
+const creQuery = ref(''); // texto visible
+const creSugs = ref([]); // sugerencias del endpoint
+const loadingCre = ref(false);
+const showCrePanel = ref(false);
+const hiCre = ref(-1); // índice resaltado
+let creTimer = null;
+const CRE_DEBOUNCE = 250;
+// id único para el listbox (accesibilidad)
+const creListId = `cre-listbox-${Math.random().toString(36).slice(2)}`;
+
+function openCrePanel() {
+    showCrePanel.value = true;
+}
+function closeCrePanel() {
+    showCrePanel.value = false;
+    hiCre.value = -1;
+}
+
+// Normalizador
+const norm = (v) => (v ?? '') + '';
+
+async function fetchCreaciones(q = '') {
+    loadingCre.value = true;
+    try {
+        const params = { per_page: 20, page: 1 };
+        if (q.trim()) params.q = q.trim();
+        const { data } = await axios.get(API_CRE, { params });
+        const items = Array.isArray(data) ? data : (data.data ?? []);
+        creSugs.value = items.map((c) => ({
+            id: c.id,
+            label: c.nombrePractica ?? c.nombre_practica,
+            programa: c.programaAcademico ?? c.programa_academico,
+            facultad: c.facultad,
+            nivel: c.nivelAcademico ?? c.nivel_academico
+        }));
+    } catch (e) {
+        creSugs.value = [];
+        toast.add({ severity: 'error', summary: 'Creaciones', detail: e?.response?.data?.message || e.message, life: 5000 });
+    } finally {
+        loadingCre.value = false;
+    }
+}
+
+function onCreInput() {
+    const q = norm(creQuery.value).trim();
+    showCrePanel.value = true;
+    clearTimeout(creTimer);
+    creTimer = setTimeout(() => {
+        if (!q) {
+            creSugs.value = [];
+            hiCre.value = -1;
+            return;
+        }
+        fetchCreaciones(q);
+    }, CRE_DEBOUNCE);
+}
+
+function onCreKeydown(e) {
+    if (!showCrePanel.value || !creSugs.value.length) return;
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        hiCre.value = hiCre.value < creSugs.value.length - 1 ? hiCre.value + 1 : 0;
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        hiCre.value = hiCre.value > 0 ? hiCre.value - 1 : creSugs.value.length - 1;
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (hiCre.value >= 0) selectCreacion(creSugs.value[hiCre.value]);
+    }
+}
+
+function selectCreacion(it) {
+    product.value.creacion = it;
+    product.value.nombrePractica = it?.label ?? '';
+    creQuery.value = it?.label ?? '';
+    closeCrePanel();
+}
+
+function onCreEnter() {
+    closeCrePanel();
+}
+function clearCreacion() {
+    if (!creQuery.value) return;
+    creQuery.value = '';
+    creSugs.value = [];
+    hiCre.value = -1;
+    closeCrePanel();
+}
 
 /* ===== DataTable events ===== */
 function onPage(e) {
@@ -418,7 +511,10 @@ function openNew() {
         fechaFinalizacion: ''
     };
     routesDraft.value = [];
-    progSugs.value = [];
+    creSugs.value = [];
+    creQuery.value = '';
+    hiCre.value = -1;
+    showCrePanel.value = false;
     resetValidation();
     productDialog.value = true;
 }
@@ -478,52 +574,6 @@ async function editProduct(row) {
     }
 
     productDialog.value = true;
-}
-
-/* ===== AutoComplete de Creaciones ===== */
-const progSugs = ref([]);
-const loadingProgs = ref(false);
-let progTimer = null;
-const PROG_DEBOUNCE = 250;
-
-function norm(v) {
-    try {
-        return (v ?? '') + '';
-    } catch {
-        return '';
-    }
-}
-
-async function fetchCreaciones(q = '') {
-    loadingProgs.value = true;
-    try {
-        const params = { per_page: 20, page: 1 };
-        if (q.trim() !== '') params.q = q.trim();
-        const { data } = await axios.get(API_CRE, { params });
-        const items = Array.isArray(data) ? data : (data.data ?? []);
-        progSugs.value = items.map((c) => ({
-            id: c.id,
-            label: c.nombrePractica ?? c.nombre_practica,
-            programa: c.programaAcademico ?? c.programa_academico,
-            facultad: c.facultad,
-            nivel: c.nivelAcademico ?? c.nivel_academico
-        }));
-    } catch (e) {
-        toast.add({ severity: 'error', summary: 'Creaciones', detail: e?.response?.data?.message || e.message, life: 5000 });
-        progSugs.value = [];
-    } finally {
-        loadingProgs.value = false;
-    }
-}
-function onCompleteCreaciones(e) {
-    const q = norm(e?.query);
-    clearTimeout(progTimer);
-    progTimer = setTimeout(() => fetchCreaciones(q), PROG_DEBOUNCE);
-}
-function onSelectCreacion(e) {
-    const it = e.value || null;
-    product.value.creacion = it;
-    product.value.nombrePractica = it?.label ?? '';
 }
 
 /* ===== Guardar ===== */
@@ -668,7 +718,7 @@ function refreshAfterDelete(deletedCount = 1) {
 onBeforeUnmount(() => {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) activeCtrl.abort();
-    if (progTimer) clearTimeout(progTimer);
+    if (creTimer) clearTimeout(creTimer);
 });
 function fmtDDMMYYYY(v) {
     if (!v) return '';
@@ -701,7 +751,7 @@ onMounted(() => getProducts());
                 <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
                     <IconField class="w-full">
                         <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
+                        <InputText id="q" name="q" v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
                         <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
                     </IconField>
                 </div>
@@ -726,6 +776,10 @@ onMounted(() => getProducts());
             :rowsPerPageOptions="[5, 10, 25, 50]"
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
+            :pt="{
+                headerCheckbox: { input: { name: 'dt-select-all' } },
+                rowCheckbox: { input: { name: 'dt-row-select' } }
+            }"
         >
             <Column selectionMode="multiple" headerStyle="width:3rem" />
             <Column field="id" header="id" sortable style="min-width: 6rem" />
@@ -750,30 +804,54 @@ onMounted(() => getProducts());
         <!-- Crear/Editar -->
         <Dialog v-model:visible="productDialog" header="Programación de práctica" :style="{ width: '42rem' }" :modal="true">
             <div class="flex flex-col gap-4">
-                <div class="flex flex-col gap-2">
-                    <label for="creacion" class="font-medium">Nombre Práctica</label>
-                    <AutoComplete
-                        inputId="creacion"
-                        v-model="product.creacion"
-                        :suggestions="progSugs"
-                        optionLabel="label"
-                        placeholder="Escribe para buscar…"
-                        :dropdown="true"
-                        :forceSelection="true"
-                        :loading="loadingProgs"
-                        @complete="onCompleteCreaciones"
-                        @item-select="onSelectCreacion"
-                        appendTo="self"
-                        class="w-full"
-                        :pt="{ root: { class: 'w-full' }, input: { class: 'w-full h-11 text-base' }, dropdownButton: { class: 'h-11' }, panel: { class: 'w-full max-h-80 overflow-auto' } }"
-                    >
-                        <template #option="{ option }">
-                            <div class="flex flex-col">
-                                <span class="font-medium">{{ option.label }}</span>
-                                <small class="text-gray-500"> {{ option.programa }}<span v-if="option.facultad"> • </span>{{ option.facultad }} </small>
-                            </div>
-                        </template>
-                    </AutoComplete>
+                <div class="flex flex-col gap-2 relative">
+                    <label for="creacionQuery" class="font-medium">Nombre Práctica</label>
+
+                    <IconField class="w-full">
+                        <InputIcon :class="loadingCre ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                        <InputText
+                            id="creacionQuery"
+                            v-model.trim="creQuery"
+                            placeholder="Escribe para buscar…"
+                            class="w-full"
+                            autocomplete="off"
+                            role="combobox"
+                            aria-autocomplete="list"
+                            :aria-expanded="showCrePanel ? 'true' : 'false'"
+                            :aria-controls="creListId"
+                            :aria-activedescendant="hiCre >= 0 ? 'cre-opt-' + hiCre : undefined"
+                            @focus="openCrePanel"
+                            @input="onCreInput"
+                            @keydown="onCreKeydown"
+                            @keydown.enter.prevent="onCreEnter"
+                            @keydown.esc.prevent="closeCrePanel"
+                        />
+                        <span v-if="creQuery" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearCreacion" aria-label="Limpiar búsqueda" />
+                    </IconField>
+
+                    <!-- Panel de sugerencias -->
+                    <div v-if="showCrePanel && creSugs.length" :id="creListId" role="listbox" class="absolute z-50 mt-1 w-full max-h-72 overflow-auto rounded-md border border-surface-300 bg-surface-0 shadow-lg">
+                        <div
+                            v-for="(it, i) in creSugs"
+                            :key="it.id"
+                            :id="'cre-opt-' + i"
+                            role="option"
+                            :aria-selected="i === hiCre ? 'true' : 'false'"
+                            class="px-3 py-2 cursor-pointer select-none"
+                            :class="i === hiCre ? 'bg-primary-50' : ''"
+                            @mouseenter="hiCre = i"
+                            @mouseleave="hiCre = -1"
+                            @mousedown.prevent
+                            @click="selectCreacion(it)"
+                        >
+                            <div class="text-sm font-medium">{{ it.label }}</div>
+                            <div class="text-xs text-gray-500">{{ it.programa }}<span v-if="it.facultad"> • </span>{{ it.facultad }}</div>
+                        </div>
+                    </div>
+
+                    <!-- Sin resultados -->
+                    <div v-else-if="showCrePanel && !loadingCre && creQuery && !creSugs.length" class="absolute z-50 mt-1 w-full rounded-md border border-surface-300 bg-surface-0 shadow-lg px-3 py-2 text-sm text-surface-500">Sin coincidencias</div>
+
                     <small v-if="showError('creacion')" class="text-red-500">{{ errors.creacion }}</small>
                 </div>
 
@@ -795,16 +873,38 @@ onMounted(() => getProducts());
                     </div>
                 </div>
 
+                <!-- Recursos necesarios -->
                 <div class="flex flex-col gap-2">
-                    <label for="recursos">Recursos necesarios</label>
-                    <Textarea id="recursos" v-model.trim="product.recursosNecesarios" :invalid="showError('recursosNecesarios')" @blur="onBlur('recursosNecesarios')" />
-                    <small v-if="showError('recursosNecesarios')" class="text-red-500">{{ errors.recursosNecesarios }}</small>
+                    <label :for="recId">Recursos necesarios</label>
+                    <textarea
+                        :id="recId"
+                        name="recursosNecesarios"
+                        v-model.trim="product.recursosNecesarios"
+                        class="p-inputtextarea p-inputtext p-component w-full"
+                        rows="3"
+                        :class="{ 'p-invalid': showError('recursosNecesarios') }"
+                        @blur="onBlur('recursosNecesarios')"
+                    ></textarea>
+                    <small v-if="showError('recursosNecesarios')" class="text-red-500">
+                        {{ errors.recursosNecesarios }}
+                    </small>
                 </div>
 
+                <!-- Justificación -->
                 <div class="flex flex-col gap-2">
-                    <label for="justificacion">Justificación</label>
-                    <Textarea id="justificacion" v-model.trim="product.justificacion" :invalid="showError('justificacion')" @blur="onBlur('justificacion')" />
-                    <small v-if="showError('justificacion')" class="text-red-500">{{ errors.justificacion }}</small>
+                    <label :for="jusId">Justificación</label>
+                    <textarea
+                        :id="jusId"
+                        name="justificacion"
+                        v-model.trim="product.justificacion"
+                        class="p-inputtextarea p-inputtext p-component w-full"
+                        rows="3"
+                        :class="{ 'p-invalid': showError('justificacion') }"
+                        @blur="onBlur('justificacion')"
+                    ></textarea>
+                    <small v-if="showError('justificacion')" class="text-red-500">
+                        {{ errors.justificacion }}
+                    </small>
                 </div>
 
                 <div class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr,auto] gap-3 items-end">
@@ -954,8 +1054,8 @@ onMounted(() => getProducts());
                                             <span class="text-red-500">No se pudo calcular la ruta.</span>
                                         </template>
                                         <template v-else-if="routeEstimates[kRoute(d, r, i)]">
-                                            <div><b>Distancia:</b> {{ km(routeEstimates[kRoute(d, r, i)].distance_m) }} km</div>
-                                            <div><b>Duración:</b> {{ human(routeEstimates[kRoute(d, r, i)].duration_s) }}</div>
+                                            <div><b>Distancia:</b> {{ fmtKm(routeEstimates[kRoute(d, r, i)].distance_m) }}</div>
+                                            <div><b>Duración:</b> {{ fmtMin(routeEstimates[kRoute(d, r, i)].duration_s) }}</div>
                                         </template>
                                         <template v-else> Sin métricas (ruta antigua o no calculada). </template>
                                     </template>

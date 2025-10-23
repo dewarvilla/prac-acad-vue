@@ -27,18 +27,151 @@ const MIN_CHARS = 2;
 let typingTimer = null;
 let activeCtrl = null;
 
+const uid = Math.random().toString(36).slice(2);
+const recId = `recursosNecesarios-${uid}`;
+const jusId = `justificacion-${uid}`;
+
+/* ===== Autocomplete de Programa académico (solo FORM, NO tabla) ===== */
+const programaQuery = ref(''); // texto visible en el input del diálogo
+const progSugs = ref([]); // sugerencias del endpoint
+const loadingProgs = ref(false);
+const showProgPanel = ref(false);
+const highlightedIndex = ref(-1);
+let progTimer = null;
+const PROG_DEBOUNCE = 250;
+
+// Normaliza a string
+const s = (v) => (v == null ? '' : String(v));
+
+function openProgPanel() {
+    showProgPanel.value = true;
+}
+function closeProgPanel() {
+    showProgPanel.value = false;
+    highlightedIndex.value = -1;
+}
+
+// Llamado al endpoint de catálogos (solo para el formulario)
+async function fetchProgramas(query = '') {
+    loadingProgs.value = true;
+    try {
+        const { data } = await axios.get(API_CAT, {
+            params: { q: query, per_page: 20, page: 1 }
+        });
+        const items = Array.isArray(data) ? data : (data.data ?? []);
+        progSugs.value = items.map((p) => ({
+            id: p.id,
+            codigo: p.codigo ?? p.id, // ajusta si tu catálogo usa otro campo
+            nombre: p.programaAcademico ?? p.programa_academico ?? p.nombre ?? p.label ?? ''
+        }));
+    } catch (e) {
+        progSugs.value = [];
+        toast.add({
+            severity: 'error',
+            summary: 'Programas',
+            detail: e?.response?.data?.message || e.message,
+            life: 4000
+        });
+    } finally {
+        loadingProgs.value = false;
+    }
+}
+
+// Input con debounce de sugerencias (NO toca la tabla)
+function onProgramaInput() {
+    const q = s(programaQuery.value).trim();
+    showProgPanel.value = true;
+    if (progTimer) clearTimeout(progTimer);
+    progTimer = setTimeout(() => {
+        if (!q.length) {
+            progSugs.value = [];
+            highlightedIndex.value = -1;
+            return; // ← NO refresca tabla
+        }
+        fetchProgramas(q);
+    }, PROG_DEBOUNCE);
+}
+
+// Navegación por teclado en el panel del formulario (NO toca la tabla)
+function onProgramaKeydown(e) {
+    if (!showProgPanel.value || !progSugs.value.length) return;
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        highlightedIndex.value = highlightedIndex.value < progSugs.value.length - 1 ? highlightedIndex.value + 1 : 0;
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        highlightedIndex.value = highlightedIndex.value > 0 ? highlightedIndex.value - 1 : progSugs.value.length - 1;
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (highlightedIndex.value >= 0) {
+            selectPrograma(progSugs.value[highlightedIndex.value]);
+        }
+    }
+}
+
+// Selección (solo setea en el FORM, NO filtra tabla)
+function selectPrograma(it) {
+    product.value.programa = it;
+    programaQuery.value = it.nombre; // no muestras el código
+    closeProgPanel();
+}
+
+// Enter en el input del FORM (no filtra tabla)
+function onProgramaEnter() {
+    closeProgPanel();
+}
+
+// Limpiar solo el campo del FORM (no filtra tabla)
+function clearPrograma() {
+    if (!programaQuery.value) return;
+    programaQuery.value = '';
+    progSugs.value = [];
+    highlightedIndex.value = -1;
+    closeProgPanel();
+}
+// — Handler general: bloquea la barra espaciadora fuera de campos de texto —
+function onFormKeyCapture(e) {
+    if (e.key !== ' ') return;
+
+    const t = e.target;
+    const tag = (t.tagName || '').toUpperCase();
+    const type = (t.type || '').toLowerCase();
+
+    const isTextInput = tag === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'reset'].includes(type);
+
+    const isEditable = isTextInput || tag === 'TEXTAREA' || t.isContentEditable;
+
+    // Deja pasar si se está escribiendo texto o si es checkbox/radio
+    if (isEditable) return;
+    if (tag === 'INPUT' && (type === 'checkbox' || type === 'radio')) return;
+
+    // Bloquea Space en botones, links, contenedor del diálogo, etc.
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+// — (Opcional) Handler específico para el botón Guardar —
+// Si prefieres, en vez de 'pt' puedes usar este:
+function onSaveBtnKeydown(e) {
+    if (e.key === ' ') e.preventDefault();
+}
+
 /* ===== Orden ===== */
 const sortParam = computed(() => (!sortField.value ? undefined : `${sortOrder.value === -1 ? '-' : ''}${sortField.value}`));
 
-/* ===== Params ===== */
+/* ===== Params (SOLO lo que afecta a la TABLA) ===== */
 function buildParams({ force = false } = {}) {
     const params = { per_page: +rows.value || 10, page: +page.value || 1 };
     if (sortParam.value) params.sort = sortParam.value;
 
+    // q general de la barra superior
     const raw = String(search.value || '').trim();
     if (raw.length > 0 && (force || raw.length >= MIN_CHARS)) {
         params.q = raw;
     }
+
+    // 🚫 Importante: NO agregar aquí filtros del formulario (programaQuery/product.programa)
     return params;
 }
 
@@ -47,10 +180,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API, {
-            params: buildParams({ force }),
-            signal
-        });
+        const { data } = await axios.get(API, { params: buildParams({ force }), signal });
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -65,7 +195,12 @@ async function getProducts(opts = {}) {
         if (!canceled) {
             const status = e?.response?.status;
             const msg = e?.response?.data?.message || e.message;
-            toast.add({ severity: 'error', summary: 'Error al cargar', detail: `[${status}] ${msg}`, life: 6000 });
+            toast.add({
+                severity: 'error',
+                summary: 'Error al cargar',
+                detail: `[${status}] ${msg}`,
+                life: 6000
+            });
             products.value = [];
             total.value = 0;
         }
@@ -78,10 +213,7 @@ function scheduleFetch() {
     const raw = String(search.value || '').trim();
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
-    if (typingTimer) {
-        clearTimeout(typingTimer);
-        typingTimer = null;
-    }
+    if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) {
         activeCtrl.abort();
         activeCtrl = null;
@@ -92,6 +224,7 @@ function scheduleFetch() {
     }, DEBOUNCE_MS);
 }
 
+/* ===== Watchers de búsqueda general ===== */
 watch(search, () => {
     page.value = 1;
     const raw = String(search.value || '').trim();
@@ -101,7 +234,7 @@ watch(search, () => {
             activeCtrl = null;
         }
         if (typingTimer) clearTimeout(typingTimer);
-        getProducts(); // listado completo sin q
+        getProducts();
     } else if (raw.length >= MIN_CHARS) {
         scheduleFetch();
     }
@@ -128,7 +261,6 @@ function forceFetch() {
     page.value = 1;
     getProducts({ force: true });
 }
-
 function clearSearch() {
     search.value = '';
     page.value = 1;
@@ -137,7 +269,7 @@ function clearSearch() {
         activeCtrl.abort();
         activeCtrl = null;
     }
-    getProducts(); // sin q -> listado completo
+    getProducts();
 }
 
 /* ===== Detalles ===== */
@@ -166,35 +298,33 @@ async function openDetails() {
 
 /* =========================
    CRUD: crear/editar
-   + AutoComplete Programa
    ========================= */
 const productDialog = ref(false);
-const submitted = ref(false);
 const product = ref({
     id: null,
-    programaAcademico: null, // { id, label, facultad?, nivel_academico? }
+    programa: null, // objeto seleccionado (ID)
     nombrePractica: '',
     recursosNecesarios: '',
-    justificacion: '',
-    nivelAcademico: null,
-    facultad: null
+    justificacion: ''
 });
 
 const errors = reactive({
-    programaAcademico: '',
     nombrePractica: '',
     recursosNecesarios: '',
     justificacion: ''
 });
 const touched = reactive({
-    programaAcademico: false,
     nombrePractica: false,
     recursosNecesarios: false,
     justificacion: false
 });
 
+function resetValidation() {
+    Object.keys(errors).forEach((k) => (errors[k] = ''));
+    Object.keys(touched).forEach((k) => (touched[k] = false));
+}
+
 const rules = {
-    programaAcademico: [(v) => !!v || 'Selecciona un programa académico.'],
     nombrePractica: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
     justificacion: [(v) => !!v || 'Requerido.']
@@ -218,156 +348,59 @@ function onBlur(f) {
 function showError(f) {
     return touched[f] && !!errors[f];
 }
-function validateAll() {
-    let ok = true;
-    Object.keys(rules).forEach((f) => {
-        touched[f] = true;
-        if (!validateField(f)) ok = false;
-    });
-    return ok;
-}
-function resetValidation() {
-    Object.keys(errors).forEach((k) => (errors[k] = ''));
-    Object.keys(touched).forEach((k) => (touched[k] = false));
-}
 
+/* === Abrir diálogo NUEVO === */
 function openNew() {
     product.value = {
         id: null,
-        programaAcademico: null,
+        programa: null,
         nombrePractica: '',
         recursosNecesarios: '',
         justificacion: ''
     };
-    progSugs.value = [];
     resetValidation();
     productDialog.value = true;
 }
+
+/* === Editar fila existente === */
 function editProduct(row) {
     product.value = {
         id: row.id ?? null,
-        programaAcademico:
+        programa:
             row.catalogoId || row.catalogo_id
                 ? {
                       id: row.catalogoId ?? row.catalogo_id,
-                      label: row.programaAcademico ?? row.programa_academico ?? row.programaAcademico ?? 'Programa Académico',
-                      facultad: row.facultad ?? row.facultad_nombre,
-                      nivel_academico: row.nivel_academico ?? row.nivel
+                      codigo: row.codigo ?? row.catalogo_id,
+                      nombre: row.programaAcademico ?? row.programa_academico ?? ''
                   }
                 : null,
         nombrePractica: row.nombrePractica ?? '',
         recursosNecesarios: row.recursosNecesarios ?? '',
         justificacion: row.justificacion ?? ''
     };
+
+    // Si quieres precargar el texto en el input del form:
+    programaQuery.value = product.value.programa ? product.value.programa.nombre : '';
+
     resetValidation();
     productDialog.value = true;
 }
 
-/* ===== AutoComplete Programas (remoto con debounce) ===== */
-const progSugs = ref([]);
-const loadingProgs = ref(false);
-let progTimer = null;
-const PROG_DEBOUNCE = 250;
-
-// --- Fix de cierre al hacer clic/scroll y para permitir espacios
-let progBlurTimer = null;
-function validateProg() {
-    touched.programaAcademico = true;
-    validateField('programaAcademico');
-}
-function onItemSelectPrograma(e) {
-    onSelectPrograma(e);
-    if (progBlurTimer) clearTimeout(progBlurTimer);
-    validateProg();
-}
-function onBlurPrograma() {
-    if (progBlurTimer) clearTimeout(progBlurTimer);
-    // pequeño delay para no cerrar cuando el clic es dentro del panel
-    progBlurTimer = setTimeout(() => {
-        validateProg();
-        progBlurTimer = null;
-    }, 150);
-}
-function stopSpacePropagation(e) {
-    if (e.code === 'Space') e.stopPropagation();
-}
-
-function normStr(v) {
-    if (typeof v === 'string') return v;
-    if (v == null) return '';
-    try {
-        return String(v);
-    } catch {
-        return '';
-    }
-}
-
-async function fetchProgramas(query = '') {
-    loadingProgs.value = true;
-    try {
-        const term = normStr(query).trim();
-
-        const params = { per_page: 20, page: 1 };
-        if (term !== '') params.q = term;
-
-        const { data } = await axios.get(API_CAT, { params });
-        const items = Array.isArray(data) ? data : (data.data ?? []);
-
-        progSugs.value = items.map((p) => ({
-            id: p.id,
-            label: p.programaAcademico ?? p.programa_academico ?? p.label,
-            facultad: p.facultad,
-            nivel_academico: p.nivelAcademico ?? p.nivel_academico
-        }));
-    } catch (e) {
-        toast.add({ severity: 'error', summary: 'Programas', detail: e?.response?.data?.message || e.message, life: 4000 });
-        progSugs.value = [];
-    } finally {
-        loadingProgs.value = false;
-    }
-}
-function onClearPrograma() {
-    product.value.programaAcademico = null;
-    product.value.nivelAcademico = null;
-    product.value.facultad = null;
-    product.value.programaAcademicoTexto = null;
-}
-function onCompleteProgramas(e) {
-    const q = normStr(e?.query).trim();
-    clearTimeout(progTimer);
-    progTimer = setTimeout(() => fetchProgramas(q), PROG_DEBOUNCE);
-}
-function onSelectPrograma(e) {
-    const it = e.value || null;
-    product.value.programaAcademico = it;
-
-    product.value.nivelAcademico = it?.nivel_academico ?? it?.nivelAcademico ?? null;
-    product.value.facultad = it?.facultad ?? null;
-    product.value.programaAcademicoTexto = it?.label ?? it?.programaAcademico ?? null;
-}
-
 /* ===== Guardar ===== */
 const saving = ref(false);
-
 async function saveProduct() {
     if (saving.value) return;
-    submitted.value = true;
-
-    if (!validateAll()) {
-        toast.add({ severity: 'warn', summary: 'Valida el formulario', detail: 'Corrige los campos marcados en rojo.', life: 3000 });
-        return;
-    }
 
     const payload = {
-        catalogo_id: product.value.programaAcademico?.id,
+        catalogo_id: product.value.programa?.id ?? null,
         nombre_practica: product.value.nombrePractica,
         recursos_necesarios: product.value.recursosNecesarios,
-        justificacion: product.value.justificacion
+        justificacion: product.value.justificacion,
+        programa_text: String(programaQuery.value || '').trim() // opcional
     };
 
     try {
         saving.value = true;
-
         if (product.value.id) {
             await axios.patch(`${API}/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
@@ -375,29 +408,21 @@ async function saveProduct() {
             await axios.post(API, payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
-
         productDialog.value = false;
         await getProducts({ force: true });
-        submitted.value = false;
     } catch (e) {
-        const status = e?.response?.status;
-        const data = e?.response?.data;
-        console.error('Error guardando', data || e);
-
-        if (status === 422 && data?.errors) {
-            errors.programaAcademico = data.errors.catalogo_id?.[0] ?? errors.programaAcademico;
-            errors.nombrePractica = data.errors.nombre_practica?.[0] ?? errors.nombrePractica;
-            errors.recursosNecesarios = data.errors.recursos_necesarios?.[0] ?? errors.recursosNecesarios;
-            errors.justificacion = data.errors.justificacion?.[0] ?? errors.justificacion;
-        }
-
-        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: data?.message || e.message, life: 5000 });
+        toast.add({
+            severity: 'error',
+            summary: 'No se pudo guardar',
+            detail: e?.message,
+            life: 5000
+        });
     } finally {
         saving.value = false;
     }
 }
 
-/* ===== Borrado ===== */
+/* ===== Borrado individual ===== */
 const deleteProductDialog = ref(false);
 const current = ref(null);
 
@@ -408,14 +433,9 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await axios.delete(`${API}/${current.value.id}`);
-
-        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
-
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
-
-        // 🔁 Refill de la página
-        await refreshAfterDelete(1);
+        await getProducts({ force: true });
     } catch (e) {
         toast.add({
             severity: 'error',
@@ -428,28 +448,23 @@ async function deleteProduct() {
         current.value = null;
     }
 }
-// ===== Borrado en lote =====
+
+/* ===== Borrado en lote ===== */
 const bulkDeleteDialog = ref(false);
 
 function confirmBulkDelete() {
     if (!selected.value.length) return;
     bulkDeleteDialog.value = true;
 }
-
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
         await axios.post(`${API}/bulk-delete`, { ids });
-
-        // Limpieza optimista
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
-
         toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
-
-        // 🔁 Refill de la página
-        await refreshAfterDelete(ids.length);
+        await getProducts({ force: true });
     } catch (e) {
         const status = e?.response?.status;
         const msg = e?.response?.data?.message || e.message;
@@ -464,22 +479,11 @@ async function bulkDelete() {
     }
 }
 
-function refreshAfterDelete(deletedCount = 1) {
-    total.value = Math.max(0, Number(total.value) - Number(deletedCount));
-    const r = Number(rows.value) || 10;
-    const totalPages = Math.max(1, Math.ceil(total.value / r));
-    if (Number(page.value) > totalPages) {
-        page.value = totalPages;
-    }
-    return getProducts({ force: true });
-}
-
 /* ===== Limpieza ===== */
 onBeforeUnmount(() => {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) activeCtrl.abort();
     if (progTimer) clearTimeout(progTimer);
-    if (progBlurTimer) clearTimeout(progBlurTimer);
 });
 
 /* ===== Montaje ===== */
@@ -503,7 +507,7 @@ onMounted(() => getProducts());
                 <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
                     <IconField class="w-full">
                         <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
+                        <InputText id="q" name="q" v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
                         <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
                     </IconField>
                 </div>
@@ -528,6 +532,10 @@ onMounted(() => getProducts());
             :rowsPerPageOptions="[5, 10, 25, 50]"
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
+            :pt="{
+                headerCheckbox: { input: { name: 'dt-select-all' } }, // checkbox de cabecera
+                rowCheckbox: { input: { name: 'dt-row-select' } } // checkbox de cada fila
+            }"
         >
             <Column selectionMode="multiple" headerStyle="width:3rem" />
             <Column field="id" header="id" sortable style="min-width: 6rem" />
@@ -545,63 +553,89 @@ onMounted(() => getProducts());
 
         <!-- Crear/Editar -->
         <Dialog v-model:visible="productDialog" header="Creación de práctica" :style="{ width: '36rem' }" :modal="true">
-            <div class="flex flex-col gap-4">
+            <!-- Captura de espacio a nivel de formulario -->
+            <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
+                <!-- ===== Nombre práctica ===== -->
                 <div class="flex flex-col gap-2">
                     <label for="nombrePractica">Nombre práctica</label>
-                    <InputText id="nombrePractica" v-model.trim="product.nombrePractica" :invalid="showError('nombrePractica')" @blur="onBlur('nombrePractica')" fluid />
+                    <InputText id="nombrePractica" name="nombrePractica" v-model.trim="product.nombrePractica" :invalid="showError('nombrePractica')" @blur="onBlur('nombrePractica')" @keydown.space.stop fluid />
                     <small v-if="showError('nombrePractica')" class="text-red-500">{{ errors.nombrePractica }}</small>
                 </div>
 
-                <div class="flex flex-col gap-2">
-                    <label for="programaAcademico" class="font-medium">Programa académico</label>
+                <!-- ===== Programa académico (Autocomplete liviano) ===== -->
+                <div class="flex flex-col gap-2 relative">
+                    <label for="programaAcademico">Programa académico</label>
 
-                    <AutoComplete
-                        inputId="programaAcademico"
-                        v-model="product.programaAcademico"
-                        :suggestions="progSugs"
-                        optionLabel="label"
-                        placeholder="Escribe para buscar…"
-                        :dropdown="true"
-                        :forceSelection="true"
-                        :loading="loadingProgs"
-                        @complete="onCompleteProgramas"
-                        @item-select="onItemSelectPrograma"
-                        @blur="onBlurPrograma"
-                        appendTo="self"
-                        class="w-full"
-                        :pt="{
-                            root: { class: 'w-full' },
-                            input: { class: 'w-full h-11 text-base' },
-                            dropdownButton: { class: 'h-11' },
-                            panel: { class: 'w-full max-h-80 overflow-auto' }
-                        }"
-                    >
-                        <template #option="{ option }">
-                            <div class="flex flex-col">
-                                <span class="font-medium">{{ option.label }}</span>
-                                <small v-if="option.facultad || option.nivel_academico" class="text-gray-500"> {{ option.facultad }}<span v-if="option.facultad && option.nivel_academico"> • </span>{{ option.nivel_academico }} </small>
-                            </div>
-                        </template>
-                    </AutoComplete>
+                    <IconField class="w-full">
+                        <InputIcon :class="loadingProgs ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                        <InputText
+                            id="programaAcademico"
+                            name="programaAcademico"
+                            v-model.trim="programaQuery"
+                            placeholder="Escribe para buscar…"
+                            class="w-full"
+                            autocomplete="off"
+                            role="combobox"
+                            aria-autocomplete="list"
+                            :aria-expanded="showProgPanel ? 'true' : 'false'"
+                            :aria-controls="'prog-listbox'"
+                            :aria-activedescendant="highlightedIndex >= 0 ? 'prog-opt-' + highlightedIndex : undefined"
+                            @focus="openProgPanel"
+                            @input="onProgramaInput"
+                            @keydown="onProgramaKeydown"
+                            @keydown.enter.prevent="onProgramaEnter"
+                            @keydown.esc.prevent="closeProgPanel"
+                        />
+                        <span v-if="programaQuery" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearPrograma" aria-label="Limpiar filtro de programa" />
+                    </IconField>
 
-                    <small v-if="showError('programaAcademico')" class="text-red-500">{{ errors.programaAcademico }}</small>
+                    <!-- Panel de sugerencias -->
+                    <div v-if="showProgPanel && progSugs.length" id="prog-listbox" role="listbox" class="absolute top-full mt-1 w-full max-h-72 overflow-auto rounded-md border border-surface-300 bg-surface-0 shadow-lg z-50">
+                        <div
+                            v-for="(it, i) in progSugs"
+                            :key="it.id"
+                            :id="'prog-opt-' + i"
+                            role="option"
+                            :aria-selected="i === highlightedIndex ? 'true' : 'false'"
+                            class="px-3 py-2 cursor-pointer select-none"
+                            :class="i === highlightedIndex ? 'bg-primary-50' : ''"
+                            @mouseenter="highlightedIndex = i"
+                            @mouseleave="highlightedIndex = -1"
+                            @mousedown.prevent
+                            @click="selectPrograma(it)"
+                        >
+                            <div class="text-sm font-medium">{{ it.nombre }}</div>
+                        </div>
+                    </div>
+
+                    <!-- “Sin resultados” -->
+                    <div v-else-if="showProgPanel && !loadingProgs && programaQuery && !progSugs.length" class="absolute top-full mt-1 w-full rounded-md border border-surface-300 bg-surface-0 shadow-lg z-50 px-3 py-2 text-sm text-surface-500">
+                        Sin coincidencias
+                    </div>
                 </div>
 
+                <!-- ===== Recursos necesarios ===== -->
                 <div class="flex flex-col gap-2">
-                    <label for="recursosNecesarios">Recursos necesarios</label>
-                    <Textarea id="recursosNecesarios" v-model.trim="product.recursosNecesarios" :invalid="showError('recursosNecesarios')" @blur="onBlur('recursosNecesarios')" fluid />
-                    <small v-if="showError('recursosNecesarios')" class="text-red-500">{{ errors.recursosNecesarios }}</small>
+                    <label :for="recId">Recursos necesarios</label>
+                    <textarea :id="recId" name="recursosNecesarios" v-model.trim="product.recursosNecesarios" class="p-inputtextarea p-inputtext p-component w-full" rows="3" @blur="onBlur('recursosNecesarios')" @keydown.space.stop></textarea>
+                    <small v-if="showError('recursosNecesarios')" class="text-red-500">
+                        {{ errors.recursosNecesarios }}
+                    </small>
                 </div>
 
+                <!-- ===== Justificación ===== -->
                 <div class="flex flex-col gap-2">
-                    <label for="justificacion">Justificación</label>
-                    <Textarea id="justificacion" v-model.trim="product.justificacion" :invalid="showError('justificacion')" @blur="onBlur('justificacion')" fluid />
-                    <small v-if="showError('justificacion')" class="text-red-500">{{ errors.justificacion }}</small>
+                    <label :for="jusId">Justificación</label>
+                    <textarea :id="jusId" name="justificacion" v-model.trim="product.justificacion" class="p-inputtextarea p-inputtext p-component w-full" rows="3" @blur="onBlur('justificacion')" @keydown.space.stop></textarea>
+                    <small v-if="showError('justificacion')" class="text-red-500">
+                        {{ errors.justificacion }}
+                    </small>
                 </div>
             </div>
 
+            <!-- ===== Footer (botones) ===== -->
             <template #footer>
-                <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" />
+                <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" @keydown="onSaveBtnKeydown" />
                 <Button type="button" label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="productDialog = false" />
             </template>
         </Dialog>
