@@ -25,6 +25,19 @@ const MIN_CHARS = 2;
 let typingTimer = null;
 let activeCtrl = null;
 
+// UID único para este DataTable
+const tableUid = `fech-${Math.random().toString(36).slice(2)}`;
+
+// Estado de “seleccionar todo”
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
+const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
+
+// Toggle del header checkbox
+function toggleAll(e) {
+    if (e.checked) selected.value = [...products.value];
+    else selected.value = [];
+}
+
 /* ===== Orden ===== */
 const sortParam = computed(() => (!sortField.value ? undefined : `${sortOrder.value === -1 ? '-' : ''}${sortField.value}`));
 
@@ -477,13 +490,13 @@ onMounted(() => getProducts());
             <template #center />
 
             <template #end>
-                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
-                    <IconField class="w-full">
-                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
-                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                    <IconField class="w-full p-input-icon-left relative">
+                        <InputIcon class="pi pi-search" />
+                        <InputText id="tableSearch" name="tableSearch" v-model.trim="search" role="searchbox" placeholder="Escribe para buscar…" class="w-full h-10 leading-10 pr-8" />
+                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch">X</button>
                     </IconField>
-                </div>
+                </form>
             </template>
         </Toolbar>
 
@@ -505,30 +518,43 @@ onMounted(() => getProducts());
             :rowsPerPageOptions="[5, 10, 25, 50]"
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
+            :pt="{
+                paginator: {
+                    rowsPerPageDropdown: {
+                        input: { id: 'cat-rows-per-page', name: 'cat-rows-per-page' }
+                    },
+                    firstPageButton: { root: { 'aria-label': 'Primera página' } },
+                    prevPageButton: { root: { 'aria-label': 'Página anterior' } },
+                    nextPageButton: { root: { 'aria-label': 'Siguiente página' } },
+                    lastPageButton: { root: { 'aria-label': 'Última página' } }
+                }
+            }"
         >
-            <Column selectionMode="multiple" headerStyle="width:3rem" />
+            <!-- Columna de selección accesible -->
+            <Column headerStyle="width:3rem">
+                <!-- Checkbox del encabezado -->
+                <template #headercheckbox>
+                    <Checkbox
+                        :inputId="tableUid + '-select-all'"
+                        :name="tableUid + '-select-all'"
+                        :aria-label="'Seleccionar todas las filas'"
+                        :binary="true"
+                        :modelValue="allSelected"
+                        :indeterminate="someSelected && !allSelected"
+                        @change="toggleAll"
+                    />
+                </template>
+
+                <!-- Checkbox por fila -->
+                <template #checkbox="{ data, index }">
+                    <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="fech-row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
+                </template>
+            </Column>
+
             <Column field="id" header="id" sortable style="min-width: 6rem" />
-            <Column field="periodo" header="Periodo" sortable style="min-width: 12rem" />
-            <Column field="fechaAperturaPreg" header="Apertura pregrado" sortable style="min-width: 12rem">
-                <template #body="{ data }">
-                    {{ ymd(data.fechaAperturaPreg) }}
-                </template>
-            </Column>
-            <Column field="fechaCierreDocentePreg" header="Cierre pregrado" sortable style="min-width: 12rem">
-                <template #body="{ data }">
-                    {{ ymd(data.fechaCierreDocentePreg) }}
-                </template>
-            </Column>
-            <Column field="fechaAperturaPostg" header="Apertura postgrado" sortable style="min-width: 12rem">
-                <template #body="{ data }">
-                    {{ ymd(data.fechaAperturaPostg) }}
-                </template>
-            </Column>
-            <Column field="fechaCierreDocentePostg" header="Cierre postgrado" sortable style="min-width: 12rem">
-                <template #body="{ data }">
-                    {{ ymd(data.fechaCierreDocentePostg) }}
-                </template>
-            </Column>
+            <Column field="programaAcademico" header="Programa Académico" sortable style="min-width: 12rem" />
+            <Column field="nivelAcademico" header="Nivel Académico" sortable style="min-width: 12rem" />
+            <Column field="facultad" header="Facultad" sortable style="min-width: 12rem" />
 
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
@@ -537,7 +563,6 @@ onMounted(() => getProducts());
                 </template>
             </Column>
         </DataTable>
-
         <!-- Crear/Editar -->
         <Dialog v-model:visible="productDialog" header="Crear Fechas por periodo" :style="{ width: '36rem' }" :modal="true">
             <div class="flex flex-col gap-4">

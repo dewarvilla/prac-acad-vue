@@ -8,7 +8,15 @@ const API_CAT = 'http://127.0.0.1:8000/api/v1/catalogos';
 
 const toast = useToast();
 
-/* ===== Tabla (server-side) ===== */
+const tableUid = `cre-${Math.random().toString(36).slice(2)}`;
+
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
+const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
+function toggleAll(e) {
+    if (e.checked) selected.value = [...products.value];
+    else selected.value = [];
+}
+
 const products = ref([]);
 const selected = ref([]);
 const loading = ref(false);
@@ -18,9 +26,8 @@ const rows = ref(10);
 const total = ref(0);
 
 const sortField = ref('nombrePractica');
-const sortOrder = ref(1); // 1 asc, -1 desc
+const sortOrder = ref(1);
 
-/* ===== Búsqueda única (en tiempo real) ===== */
 const search = ref('');
 const DEBOUNCE_MS = 250;
 const MIN_CHARS = 2;
@@ -31,16 +38,14 @@ const uid = Math.random().toString(36).slice(2);
 const recId = `recursosNecesarios-${uid}`;
 const jusId = `justificacion-${uid}`;
 
-/* ===== Autocomplete de Programa académico (solo FORM, NO tabla) ===== */
-const programaQuery = ref(''); // texto visible en el input del diálogo
-const progSugs = ref([]); // sugerencias del endpoint
+const programaQuery = ref('');
+const progSugs = ref([]);
 const loadingProgs = ref(false);
 const showProgPanel = ref(false);
 const highlightedIndex = ref(-1);
 let progTimer = null;
 const PROG_DEBOUNCE = 250;
 
-// Normaliza a string
 const s = (v) => (v == null ? '' : String(v));
 
 function openProgPanel() {
@@ -51,7 +56,6 @@ function closeProgPanel() {
     highlightedIndex.value = -1;
 }
 
-// Llamado al endpoint de catálogos (solo para el formulario)
 async function fetchProgramas(query = '') {
     loadingProgs.value = true;
     try {
@@ -61,7 +65,7 @@ async function fetchProgramas(query = '') {
         const items = Array.isArray(data) ? data : (data.data ?? []);
         progSugs.value = items.map((p) => ({
             id: p.id,
-            codigo: p.codigo ?? p.id, // ajusta si tu catálogo usa otro campo
+            codigo: p.codigo ?? p.id,
             nombre: p.programaAcademico ?? p.programa_academico ?? p.nombre ?? p.label ?? ''
         }));
     } catch (e) {
@@ -77,7 +81,6 @@ async function fetchProgramas(query = '') {
     }
 }
 
-// Input con debounce de sugerencias (NO toca la tabla)
 function onProgramaInput() {
     const q = s(programaQuery.value).trim();
     showProgPanel.value = true;
@@ -86,13 +89,12 @@ function onProgramaInput() {
         if (!q.length) {
             progSugs.value = [];
             highlightedIndex.value = -1;
-            return; // ← NO refresca tabla
+            return;
         }
         fetchProgramas(q);
     }, PROG_DEBOUNCE);
 }
 
-// Navegación por teclado en el panel del formulario (NO toca la tabla)
 function onProgramaKeydown(e) {
     if (!showProgPanel.value || !progSugs.value.length) return;
 
@@ -110,19 +112,16 @@ function onProgramaKeydown(e) {
     }
 }
 
-// Selección (solo setea en el FORM, NO filtra tabla)
 function selectPrograma(it) {
     product.value.programa = it;
-    programaQuery.value = it.nombre; // no muestras el código
+    programaQuery.value = it.nombre;
     closeProgPanel();
 }
 
-// Enter en el input del FORM (no filtra tabla)
 function onProgramaEnter() {
     closeProgPanel();
 }
 
-// Limpiar solo el campo del FORM (no filtra tabla)
 function clearPrograma() {
     if (!programaQuery.value) return;
     programaQuery.value = '';
@@ -130,7 +129,6 @@ function clearPrograma() {
     highlightedIndex.value = -1;
     closeProgPanel();
 }
-// — Handler general: bloquea la barra espaciadora fuera de campos de texto —
 function onFormKeyCapture(e) {
     if (e.key !== ' ') return;
 
@@ -142,17 +140,13 @@ function onFormKeyCapture(e) {
 
     const isEditable = isTextInput || tag === 'TEXTAREA' || t.isContentEditable;
 
-    // Deja pasar si se está escribiendo texto o si es checkbox/radio
     if (isEditable) return;
     if (tag === 'INPUT' && (type === 'checkbox' || type === 'radio')) return;
 
-    // Bloquea Space en botones, links, contenedor del diálogo, etc.
     e.preventDefault();
     e.stopPropagation();
 }
 
-// — (Opcional) Handler específico para el botón Guardar —
-// Si prefieres, en vez de 'pt' puedes usar este:
 function onSaveBtnKeydown(e) {
     if (e.key === ' ') e.preventDefault();
 }
@@ -160,27 +154,23 @@ function onSaveBtnKeydown(e) {
 /* ===== Orden ===== */
 const sortParam = computed(() => (!sortField.value ? undefined : `${sortOrder.value === -1 ? '-' : ''}${sortField.value}`));
 
-/* ===== Params (SOLO lo que afecta a la TABLA) ===== */
 function buildParams({ force = false } = {}) {
     const params = { per_page: +rows.value || 10, page: +page.value || 1 };
     if (sortParam.value) params.sort = sortParam.value;
 
-    // q general de la barra superior
     const raw = String(search.value || '').trim();
     if (raw.length > 0 && (force || raw.length >= MIN_CHARS)) {
         params.q = raw;
     }
-
-    // 🚫 Importante: NO agregar aquí filtros del formulario (programaQuery/product.programa)
     return params;
 }
 
-/* ===== Llamada con cancelación ===== */
 async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
         const { data } = await axios.get(API, { params: buildParams({ force }), signal });
+
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -224,7 +214,6 @@ function scheduleFetch() {
     }, DEBOUNCE_MS);
 }
 
-/* ===== Watchers de búsqueda general ===== */
 watch(search, () => {
     page.value = 1;
     const raw = String(search.value || '').trim();
@@ -240,7 +229,6 @@ watch(search, () => {
     }
 });
 
-/* ===== DataTable events ===== */
 function onPage(e) {
     page.value = Number(e.page) + 1;
     rows.value = Number(e.rows);
@@ -296,13 +284,10 @@ async function openDetails() {
     detailsLoading.value = false;
 }
 
-/* =========================
-   CRUD: crear/editar
-   ========================= */
 const productDialog = ref(false);
 const product = ref({
     id: null,
-    programa: null, // objeto seleccionado (ID)
+    programa: null,
     nombrePractica: '',
     recursosNecesarios: '',
     justificacion: ''
@@ -348,8 +333,6 @@ function onBlur(f) {
 function showError(f) {
     return touched[f] && !!errors[f];
 }
-
-/* === Abrir diálogo NUEVO === */
 function openNew() {
     product.value = {
         id: null,
@@ -362,7 +345,7 @@ function openNew() {
     productDialog.value = true;
 }
 
-/* === Editar fila existente === */
+/* === Editar === */
 function editProduct(row) {
     product.value = {
         id: row.id ?? null,
@@ -378,8 +361,6 @@ function editProduct(row) {
         recursosNecesarios: row.recursosNecesarios ?? '',
         justificacion: row.justificacion ?? ''
     };
-
-    // Si quieres precargar el texto en el input del form:
     programaQuery.value = product.value.programa ? product.value.programa.nombre : '';
 
     resetValidation();
@@ -396,7 +377,7 @@ async function saveProduct() {
         nombre_practica: product.value.nombrePractica,
         recursos_necesarios: product.value.recursosNecesarios,
         justificacion: product.value.justificacion,
-        programa_text: String(programaQuery.value || '').trim() // opcional
+        programa_text: String(programaQuery.value || '').trim()
     };
 
     try {
@@ -486,8 +467,9 @@ onBeforeUnmount(() => {
     if (progTimer) clearTimeout(progTimer);
 });
 
-/* ===== Montaje ===== */
-onMounted(() => getProducts());
+onMounted(async () => {
+    await getProducts();
+});
 </script>
 
 <template>
@@ -504,13 +486,13 @@ onMounted(() => getProducts());
             <template #center />
 
             <template #end>
-                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
-                    <IconField class="w-full">
-                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText id="q" name="q" v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
-                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                    <IconField class="w-full p-input-icon-left relative">
+                        <InputIcon class="pi pi-search" />
+                        <InputText id="tableSearch" name="tableSearch" v-model.trim="search" role="searchbox" placeholder="Escribe para buscar…" class="w-full h-10 leading-10 pr-8" />
+                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch">X</button>
                     </IconField>
-                </div>
+                </form>
             </template>
         </Toolbar>
 
@@ -533,11 +515,31 @@ onMounted(() => getProducts());
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
             :pt="{
-                headerCheckbox: { input: { name: 'dt-select-all' } }, // checkbox de cabecera
-                rowCheckbox: { input: { name: 'dt-row-select' } } // checkbox de cada fila
+                paginator: {
+                    rowsPerPageDropdown: { input: { id: 'dt-rows-per-page', name: 'dt-rows-per-page' } },
+                    firstPageButton: { root: { 'aria-label': 'Primera página' } },
+                    prevPageButton: { root: { 'aria-label': 'Página anterior' } },
+                    nextPageButton: { root: { 'aria-label': 'Siguiente página' } },
+                    lastPageButton: { root: { 'aria-label': 'Última página' } }
+                }
             }"
         >
-            <Column selectionMode="multiple" headerStyle="width:3rem" />
+            <Column headerStyle="width:3rem">
+                <template #headercheckbox>
+                    <Checkbox
+                        :inputId="tableUid + '-select-all'"
+                        :name="tableUid + '-select-all'"
+                        :aria-label="'Seleccionar todas las filas'"
+                        :binary="true"
+                        :modelValue="allSelected"
+                        :indeterminate="someSelected && !allSelected"
+                        @change="toggleAll"
+                    />
+                </template>
+                <template #checkbox="{ data, index }">
+                    <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
+                </template>
+            </Column>
             <Column field="id" header="id" sortable style="min-width: 6rem" />
             <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 12rem" />
             <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem" />
@@ -553,7 +555,6 @@ onMounted(() => getProducts());
 
         <!-- Crear/Editar -->
         <Dialog v-model:visible="productDialog" header="Creación de práctica" :style="{ width: '36rem' }" :modal="true">
-            <!-- Captura de espacio a nivel de formulario -->
             <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
                 <!-- ===== Nombre práctica ===== -->
                 <div class="flex flex-col gap-2">
@@ -562,18 +563,19 @@ onMounted(() => getProducts());
                     <small v-if="showError('nombrePractica')" class="text-red-500">{{ errors.nombrePractica }}</small>
                 </div>
 
-                <!-- ===== Programa académico (Autocomplete liviano) ===== -->
+                <!-- ===== Programa académico===== -->
                 <div class="flex flex-col gap-2 relative">
                     <label for="programaAcademico">Programa académico</label>
 
-                    <IconField class="w-full">
+                    <IconField class="w-full relative">
                         <InputIcon :class="loadingProgs ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
                         <InputText
                             id="programaAcademico"
                             name="programaAcademico"
+                            :class="{ 'rounded-b-none': showProgPanel }"
                             v-model.trim="programaQuery"
                             placeholder="Escribe para buscar…"
-                            class="w-full"
+                            class="w-full h-10 leading-10 pl-9 pr-8"
                             autocomplete="off"
                             role="combobox"
                             aria-autocomplete="list"
@@ -586,11 +588,16 @@ onMounted(() => getProducts());
                             @keydown.enter.prevent="onProgramaEnter"
                             @keydown.esc.prevent="closeProgPanel"
                         />
-                        <span v-if="programaQuery" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearPrograma" aria-label="Limpiar filtro de programa" />
+                        <span v-if="programaQuery" class="pi pi-times cursor-pointer absolute right-3 top-1/2 -translate-y-1/2" @click="clearPrograma" aria-label="Limpiar filtro de programa" />
                     </IconField>
 
                     <!-- Panel de sugerencias -->
-                    <div v-if="showProgPanel && progSugs.length" id="prog-listbox" role="listbox" class="absolute top-full mt-1 w-full max-h-72 overflow-auto rounded-md border border-surface-300 bg-surface-0 shadow-lg z-50">
+                    <div
+                        v-if="showProgPanel && progSugs.length"
+                        id="prog-listbox"
+                        role="listbox"
+                        class="absolute left-0 right-0 top-full -mt-px max-h-72 overflow-auto z-50 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                    >
                         <div
                             v-for="(it, i) in progSugs"
                             :key="it.id"
@@ -609,7 +616,10 @@ onMounted(() => getProducts());
                     </div>
 
                     <!-- “Sin resultados” -->
-                    <div v-else-if="showProgPanel && !loadingProgs && programaQuery && !progSugs.length" class="absolute top-full mt-1 w-full rounded-md border border-surface-300 bg-surface-0 shadow-lg z-50 px-3 py-2 text-sm text-surface-500">
+                    <div
+                        v-else-if="showProgPanel && !loadingProgs && programaQuery && !progSugs.length"
+                        class="absolute left-0 right-0 top-full -mt-px z-50 px-3 py-2 text-sm text-surface-500 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                    >
                         Sin coincidencias
                     </div>
                 </div>
@@ -643,7 +653,7 @@ onMounted(() => getProducts());
         <!-- Confirmación de borrado -->
         <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
             <div>
-                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.anio }}</b
+                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.nombrePractica }}</b
                 >?
             </div>
             <template #footer>

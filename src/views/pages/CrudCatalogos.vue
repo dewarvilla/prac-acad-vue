@@ -6,7 +6,6 @@ import axios from 'axios';
 const API = 'http://127.0.0.1:8000/api/v1/catalogos';
 const toast = useToast();
 
-/* ===== Tabla (server-side) ===== */
 const products = ref([]);
 const selected = ref([]);
 const loading = ref(false);
@@ -16,19 +15,27 @@ const rows = ref(10);
 const total = ref(0);
 
 const sortField = ref('facultad');
-const sortOrder = ref(1); // 1 asc, -1 desc
+const sortOrder = ref(1);
 
-/* ===== Búsqueda única (en tiempo real) ===== */
 const search = ref('');
 const DEBOUNCE_MS = 250;
 const MIN_CHARS = 2;
 let typingTimer = null;
 let activeCtrl = null;
 
+const tableUid = `cat-${Math.random().toString(36).slice(2)}`;
+
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
+const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
+
+function toggleAll(e) {
+    if (e.checked) selected.value = [...products.value];
+    else selected.value = [];
+}
+
 /* ===== Orden ===== */
 const sortParam = computed(() => (!sortField.value ? undefined : `${sortOrder.value === -1 ? '-' : ''}${sortField.value}`));
 
-/* ===== Params ===== */
 function buildParams({ force = false } = {}) {
     const params = { per_page: +rows.value || 10, page: +page.value || 1 };
     if (sortParam.value) params.sort = sortParam.value;
@@ -40,7 +47,6 @@ function buildParams({ force = false } = {}) {
     return params;
 }
 
-/* ===== Llamada con cancelación ===== */
 async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
@@ -90,23 +96,20 @@ function scheduleFetch() {
     }, DEBOUNCE_MS);
 }
 
-/* Dispara solo cuando: vacío (recargar todo) o ≥ 2 chars */
 watch(search, () => {
     page.value = 1;
-    // si está vacío, recarga todo; si no, usar debounce
     if (String(search.value || '').trim().length === 0) {
         if (activeCtrl) {
             activeCtrl.abort();
             activeCtrl = null;
         }
         if (typingTimer) clearTimeout(typingTimer);
-        getProducts(); // listado completo
+        getProducts();
     } else {
         scheduleFetch();
     }
 });
 
-/* ===== Acciones rápidas ===== */
 function forceFetch() {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) {
@@ -124,10 +127,9 @@ function clearSearch() {
         activeCtrl.abort();
         activeCtrl = null;
     }
-    getProducts(); // sin q -> listado completo
+    getProducts();
 }
 
-/* ===== DataTable events ===== */
 function onPage(e) {
     page.value = Number(e.page) + 1;
     rows.value = Number(e.rows);
@@ -164,7 +166,6 @@ async function openDetails() {
     detailsLoading.value = false;
 }
 
-/* ===== CRUD: crear/editar ===== */
 const productDialog = ref(false);
 const submitted = ref(false);
 const product = ref({
@@ -284,13 +285,8 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await axios.delete(`${API}/${current.value.id}`);
-
-        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
-
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
-
-        // 🔁 Refill de la página
         await refreshAfterDelete(1);
     } catch (e) {
         toast.add({
@@ -316,15 +312,10 @@ async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
         await axios.post(`${API}/bulk-delete`, { ids });
-
-        // Limpieza optimista
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
-
         toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
-
-        // 🔁 Refill de la página
         await refreshAfterDelete(ids.length);
     } catch (e) {
         const status = e?.response?.status;
@@ -372,14 +363,13 @@ onMounted(() => getProducts());
             <template #center />
 
             <template #end>
-                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
-                    <IconField class="w-full">
-                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
-                        <!-- limpiar dentro del campo -->
-                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                    <IconField class="w-full p-input-icon-left relative">
+                        <InputIcon class="pi pi-search" />
+                        <InputText id="tableSearch" name="tableSearch" v-model.trim="search" role="searchbox" placeholder="Escribe para buscar…" class="w-full h-10 leading-10 pr-8" />
+                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch">X</button>
                     </IconField>
-                </div>
+                </form>
             </template>
         </Toolbar>
 
@@ -401,12 +391,51 @@ onMounted(() => getProducts());
             :rowsPerPageOptions="[5, 10, 25, 50]"
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
+            :pt="{
+                headerCheckbox: {
+                    input: {
+                        name: 'cat-select-all',
+                        'aria-label': 'Seleccionar todas las filas'
+                    }
+                },
+                rowCheckbox: (ctx) => ({
+                    input: {
+                        name: 'cat-row-select',
+                        'aria-label': `Seleccionar fila ${Number(ctx?.context?.index) + 1}`
+                    }
+                }),
+                paginator: {
+                    rowsPerPageDropdown: {
+                        input: { id: 'cat-rows-per-page', name: 'cat-rows-per-page' }
+                    },
+                    firstPageButton: { root: { 'aria-label': 'Primera página' } },
+                    prevPageButton: { root: { 'aria-label': 'Página anterior' } },
+                    nextPageButton: { root: { 'aria-label': 'Siguiente página' } },
+                    lastPageButton: { root: { 'aria-label': 'Última página' } }
+                }
+            }"
         >
-            <Column selectionMode="multiple" headerStyle="width:3rem" />
+            <Column headerStyle="width:3rem">
+                <template #headercheckbox>
+                    <Checkbox
+                        :inputId="tableUid + '-select-all'"
+                        :name="tableUid + '-select-all'"
+                        :aria-label="'Seleccionar todas las filas'"
+                        :binary="true"
+                        :modelValue="allSelected"
+                        :indeterminate="someSelected && !allSelected"
+                        @change="toggleAll"
+                    />
+                </template>
+                <template #checkbox="{ data, index }">
+                    <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="cat-row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
+                </template>
+            </Column>
             <Column field="id" header="id" sortable style="min-width: 6rem" />
             <Column field="programaAcademico" header="Programa Académico" sortable style="min-width: 12rem" />
             <Column field="nivelAcademico" header="Nivel Académico" sortable style="min-width: 12rem" />
             <Column field="facultad" header="Facultad" sortable style="min-width: 12rem" />
+
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
                     <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
@@ -452,7 +481,7 @@ onMounted(() => getProducts());
             </template>
         </Dialog>
 
-        <!-- Detalles (Catálogos) -->
+        <!-- Detalles-->
         <Dialog v-model:visible="detailsDialog" header="Detalles de catálogo" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
             <div v-if="detailsLoading" class="p-4">Cargando…</div>
 

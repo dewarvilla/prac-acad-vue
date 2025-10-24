@@ -6,10 +6,19 @@ import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
 
 /* ========= Cache/ayudas para métricas de rutas en Detalles ========= */
 const routeEstimates = reactive({}); // { [key]: { loading?, error?, distance_m?, duration_s? } }
-
+const tableUid = `prog-${Math.random().toString(36).slice(2)}`;
 const uid = Math.random().toString(36).slice(2);
 const recId = `recursos-${uid}`;
 const jusId = `justificacion-${uid}`;
+const numEstId = `num-est-${uid}`;
+
+// helpers para el “select all”
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
+const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
+function toggleAll(e) {
+    if (e.checked) selected.value = [...products.value];
+    else selected.value = [];
+}
 
 /** Clave estable por ruta (incluye coords para evitar colisiones si no hay id) */
 function kRoute(prog, r, i) {
@@ -364,7 +373,8 @@ const product = ref({
     justificacion: '',
     recursosNecesarios: '',
     fechaInicio: '',
-    fechaFinalizacion: ''
+    fechaFinalizacion: '',
+    numeroEstudiantes: ''
 });
 
 /* ==== Recorridos dentro del modal ==== */
@@ -450,21 +460,24 @@ const errors = reactive({
     justificacion: '',
     recursosNecesarios: '',
     fechaInicio: '',
-    fechaFinalizacion: ''
+    fechaFinalizacion: '',
+    numeroEstudiantes: null
 });
 const touched = reactive({
     creacion: false,
     justificacion: false,
     recursosNecesarios: false,
     fechaInicio: false,
-    fechaFinalizacion: false
+    fechaFinalizacion: false,
+    numeroEstudiantes: false
 });
 const rules = {
     creacion: [(v) => !!v || 'Selecciona una práctica (Creación).'],
     justificacion: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
     fechaInicio: [(v) => !!v || 'Requerido.'],
-    fechaFinalizacion: [(v) => !!v || 'Requerido.']
+    fechaFinalizacion: [(v) => !!v || 'Requerido.'],
+    numeroEstudiantes: [(v) => (v !== null && v !== '') || 'Requerido.', (v) => (Number.isInteger(+v) && +v > 0) || 'Debe ser un entero mayor que 0.']
 };
 function validateField(f) {
     errors[f] = '';
@@ -508,7 +521,8 @@ function openNew() {
         justificacion: '',
         recursosNecesarios: '',
         fechaInicio: '',
-        fechaFinalizacion: ''
+        fechaFinalizacion: '',
+        numeroEstudiantes: null
     };
     routesDraft.value = [];
     creSugs.value = [];
@@ -543,7 +557,8 @@ async function editProduct(row) {
         justificacion: row.justificacion ?? '',
         recursosNecesarios: row.recursosNecesarios ?? '',
         fechaInicio: toDateInput(row.fechaInicio),
-        fechaFinalizacion: toDateInput(row.fechaFinalizacion)
+        fechaFinalizacion: toDateInput(row.fechaFinalizacion),
+        numeroEstudiantes: row.numeroEstudiantes ?? ''
     };
     resetValidation();
     routesDraft.value = [];
@@ -592,7 +607,8 @@ async function saveProduct() {
         justificacion: product.value.justificacion,
         recursos_necesarios: product.value.recursosNecesarios,
         fecha_inicio: product.value.fechaInicio,
-        fecha_finalizacion: product.value.fechaFinalizacion
+        fecha_finalizacion: product.value.fechaFinalizacion,
+        numero_estudiantes: product.value.numeroEstudiantes
     };
 
     try {
@@ -652,6 +668,7 @@ async function saveProduct() {
             errors.recursosNecesarios = data.errors.recursos_necesarios?.[0] ?? errors.recursosNecesarios;
             errors.fechaInicio = data.errors.fecha_inicio?.[0] ?? errors.fechaInicio;
             errors.fechaFinalizacion = data.errors.fecha_finalizacion?.[0] ?? errors.fechaFinalizacion;
+            errors.numeroEstudiantes = data.errors.numero_estudiantes?.[0] ?? errors.numeroEstudiantes;
         }
         toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: data?.message || e.message, life: 5000 });
     } finally {
@@ -748,13 +765,23 @@ onMounted(() => getProducts());
             </template>
 
             <template #end>
-                <div class="min-w-0 w-full sm:w-80 md:w-[26rem]">
-                    <IconField class="w-full">
+                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                    <IconField class="w-full p-input-icon-left relative">
                         <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText id="q" name="q" v-model.trim="search" placeholder="Escribe para buscar…" class="w-full" @keydown.enter.prevent="forceFetch" @keydown.esc.prevent="clearSearch" />
-                        <span v-if="search" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearSearch" aria-label="Limpiar búsqueda" />
+                        <InputText
+                            id="progSearch"
+                            name="progSearch"
+                            v-model.trim="search"
+                            role="searchbox"
+                            placeholder="Escribe para buscar…"
+                            class="w-full h-10 leading-10 pr-8"
+                            autocomplete="off"
+                            @keydown.enter.prevent="forceFetch"
+                            @keydown.esc.prevent="clearSearch"
+                        />
+                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch" aria-label="Limpiar búsqueda">X</button>
                     </IconField>
-                </div>
+                </form>
             </template>
         </Toolbar>
 
@@ -777,14 +804,39 @@ onMounted(() => getProducts());
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
             :pt="{
-                headerCheckbox: { input: { name: 'dt-select-all' } },
-                rowCheckbox: { input: { name: 'dt-row-select' } }
+                paginator: {
+                    rowsPerPageDropdown: {
+                        input: { id: 'prog-rows-per-page', name: 'prog-rows-per-page' }
+                    },
+                    firstPageButton: { root: { 'aria-label': 'Primera página' } },
+                    prevPageButton: { root: { 'aria-label': 'Página anterior' } },
+                    nextPageButton: { root: { 'aria-label': 'Siguiente página' } },
+                    lastPageButton: { root: { 'aria-label': 'Última página' } }
+                }
             }"
         >
-            <Column selectionMode="multiple" headerStyle="width:3rem" />
+            <!-- Columna de selección con ids únicos -->
+            <Column headerStyle="width:3rem">
+                <template #headercheckbox>
+                    <Checkbox
+                        :inputId="tableUid + '-select-all'"
+                        :name="tableUid + '-select-all'"
+                        :aria-label="'Seleccionar todas las filas'"
+                        :binary="true"
+                        :modelValue="allSelected"
+                        :indeterminate="someSelected && !allSelected"
+                        @change="toggleAll"
+                    />
+                </template>
+                <template #checkbox="{ data, index }">
+                    <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
+                </template>
+            </Column>
+
             <Column field="id" header="id" sortable style="min-width: 6rem" />
             <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 14rem" />
             <Column field="estadoPractica" header="Estado" sortable style="min-width: 10rem" />
+            <Column field="numeroEstudiantes" header="Estudiantes" sortable style="min-width: 8rem" />
             <Column field="fechaInicio" header="Inicio" sortable style="min-width: 10rem">
                 <template #body="{ data }">{{ fmtDDMMYYYY(data.fechaInicio) }}</template>
             </Column>
@@ -792,7 +844,6 @@ onMounted(() => getProducts());
                 <template #body="{ data }">{{ fmtDDMMYYYY(data.fechaFinalizacion) }}</template>
             </Column>
 
-            <!-- Acciones -->
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
                     <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
@@ -802,18 +853,20 @@ onMounted(() => getProducts());
         </DataTable>
 
         <!-- Crear/Editar -->
-        <Dialog v-model:visible="productDialog" header="Programación de práctica" :style="{ width: '42rem' }" :modal="true">
+        <Dialog v-model:visible="productDialog" header="Programación de práctica" :style="{ width: '42rem' }" :modal="true" appendTo="body">
             <div class="flex flex-col gap-4">
+                <!-- ===== Nombre Práctica (Autocomplete liviano) ===== -->
                 <div class="flex flex-col gap-2 relative">
                     <label for="creacionQuery" class="font-medium">Nombre Práctica</label>
 
-                    <IconField class="w-full">
+                    <IconField class="w-full relative">
                         <InputIcon :class="loadingCre ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
                         <InputText
                             id="creacionQuery"
                             v-model.trim="creQuery"
                             placeholder="Escribe para buscar…"
-                            class="w-full"
+                            class="w-full h-10 leading-10 pl-9 pr-8"
+                            :class="{ 'rounded-b-none': showCrePanel }"
                             autocomplete="off"
                             role="combobox"
                             aria-autocomplete="list"
@@ -826,11 +879,16 @@ onMounted(() => getProducts());
                             @keydown.enter.prevent="onCreEnter"
                             @keydown.esc.prevent="closeCrePanel"
                         />
-                        <span v-if="creQuery" class="pi pi-times cursor-pointer p-input-icon-right" style="right: 0.75rem" @click="clearCreacion" aria-label="Limpiar búsqueda" />
+                        <span v-if="creQuery" class="pi pi-times cursor-pointer absolute right-3 top-1/2 -translate-y-1/2" @click="clearCreacion" aria-label="Limpiar búsqueda" />
                     </IconField>
 
-                    <!-- Panel de sugerencias -->
-                    <div v-if="showCrePanel && creSugs.length" :id="creListId" role="listbox" class="absolute z-50 mt-1 w-full max-h-72 overflow-auto rounded-md border border-surface-300 bg-surface-0 shadow-lg">
+                    <!-- Panel de sugerencias (pegado al input, sin solapar) -->
+                    <div
+                        v-if="showCrePanel && creSugs.length"
+                        :id="creListId"
+                        role="listbox"
+                        class="absolute left-0 right-0 top-full -mt-px max-h-72 overflow-auto z-50 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                    >
                         <div
                             v-for="(it, i) in creSugs"
                             :key="it.id"
@@ -849,8 +907,13 @@ onMounted(() => getProducts());
                         </div>
                     </div>
 
-                    <!-- Sin resultados -->
-                    <div v-else-if="showCrePanel && !loadingCre && creQuery && !creSugs.length" class="absolute z-50 mt-1 w-full rounded-md border border-surface-300 bg-surface-0 shadow-lg px-3 py-2 text-sm text-surface-500">Sin coincidencias</div>
+                    <!-- “Sin resultados” -->
+                    <div
+                        v-else-if="showCrePanel && !loadingCre && creQuery && !creSugs.length"
+                        class="absolute left-0 right-0 top-full -mt-px z-50 px-3 py-2 text-sm text-surface-500 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                    >
+                        Sin coincidencias
+                    </div>
 
                     <small v-if="showError('creacion')" class="text-red-500">{{ errors.creacion }}</small>
                 </div>
@@ -907,6 +970,15 @@ onMounted(() => getProducts());
                     </small>
                 </div>
 
+                <!-- Número de estudiantes -->
+                <div class="flex flex-col gap-2">
+                    <label :for="numEstId">Número de estudiantes</label>
+                    <InputNumber :inputId="numEstId" v-model="product.numeroEstudiantes" :min="0" :useGrouping="false" :class="{ 'p-invalid': showError('numeroEstudiantes') }" @blur="onBlur('numeroEstudiantes')" fluid />
+                    <small v-if="showError('numeroEstudiantes')" class="text-red-500">
+                        {{ errors.numeroEstudiantes }}
+                    </small>
+                </div>
+
                 <div class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr,auto] gap-3 items-end">
                     <div class="flex flex-col gap-2">
                         <label for="lugar" class="font-medium">Lugar de realización</label>
@@ -958,7 +1030,7 @@ onMounted(() => getProducts());
         </Dialog>
 
         <!-- Confirmar eliminar -->
-        <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
+        <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true" appendTo="body">
             <div>
                 ¿Seguro que quieres eliminar la programación <b>Id:{{ current?.id }}</b> — <b>{{ current?.nombrePractica }}</b
                 >?
@@ -992,6 +1064,10 @@ onMounted(() => getProducts());
                             <div>
                                 <dt class="text-sm font-semibold">Fechas</dt>
                                 <dd class="break-words">{{ fmtDDMMYYYY(d.fechaInicio) }} → {{ fmtDDMMYYYY(d.fechaFinalizacion) }}</dd>
+                            </div>
+                            <div>
+                                <dt class="text-sm font-semibold">N.º estudiantes</dt>
+                                <dd>{{ d.numeroEstudiantes }}</dd>
                             </div>
                         </dl>
 
