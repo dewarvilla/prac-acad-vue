@@ -450,9 +450,7 @@ const formatMoney = (v) => {
                 }
             }"
         >
-            <!-- Columna de selección accesible -->
             <Column headerStyle="width:3rem">
-                <!-- Checkbox del encabezado -->
                 <template #headercheckbox>
                     <Checkbox
                         :inputId="tableUid + '-select-all'"
@@ -493,11 +491,8 @@ const formatMoney = (v) => {
                     <InputText id="anio" v-model.trim="product.anio" :invalid="showError('anio')" @blur="onBlur('anio')" fluid />
                     <small v-if="showError('anio')" class="text-red-500">{{ errors.anio }}</small>
                 </div>
-                <div class="flex flex-col gap-2">
-                    <label for="valor">Valor</label>
-                    <InputNumber id="valor" v-model="product.valor" mode="currency" currency="COP" locale="es-CO" :minFractionDigits="2" :maxFractionDigits="2" fluid />
-                    <small v-if="showError('valor')" class="text-red-500">{{ errors.valor }}</small>
-                </div>
+                <label for="valor">Valor</label>
+                <InputNumber inputId="valor" v-model="product.valor" mode="currency" currency="COP" locale="es-CO" :minFractionDigits="2" :maxFractionDigits="2" />
             </div>
             <template #footer>
                 <Button label="Guardar" icon="pi pi-check" @click="saveProduct" />

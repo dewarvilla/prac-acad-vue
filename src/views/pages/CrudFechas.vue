@@ -530,9 +530,7 @@ onMounted(() => getProducts());
                 }
             }"
         >
-            <!-- Columna de selección accesible -->
             <Column headerStyle="width:3rem">
-                <!-- Checkbox del encabezado -->
                 <template #headercheckbox>
                     <Checkbox
                         :inputId="tableUid + '-select-all'"
@@ -545,17 +543,16 @@ onMounted(() => getProducts());
                     />
                 </template>
 
-                <!-- Checkbox por fila -->
                 <template #checkbox="{ data, index }">
                     <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="fech-row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
                 </template>
             </Column>
 
             <Column field="id" header="id" sortable style="min-width: 6rem" />
-            <Column field="programaAcademico" header="Programa Académico" sortable style="min-width: 12rem" />
-            <Column field="nivelAcademico" header="Nivel Académico" sortable style="min-width: 12rem" />
-            <Column field="facultad" header="Facultad" sortable style="min-width: 12rem" />
-
+            <Column field="fechaAperturaPreg" header="Apertura Pregrado" sortable style="min-width: 12rem" />
+            <Column field="fechaCierreDocentePreg" header="Cierre Pregrado" sortable style="min-width: 12rem" />
+            <Column field="fechaAperturaPostg" header="Apertura Postgrado" sortable style="min-width: 12rem" />
+            <Column field="fechaCierreDocentePostg" header="Cierre Postgrado" sortable style="min-width: 12rem" />
             <Column :exportable="false" headerStyle="width:9rem">
                 <template #body="{ data }">
                     <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
@@ -572,43 +569,42 @@ onMounted(() => getProducts());
                     <small v-if="showError('periodo')" class="text-red-500">{{ errors.periodo }}</small>
                 </div>
 
-                <!-- Pregrado -->
                 <div class="flex flex-col gap-2">
                     <label for="fechaAperturaPreg">Fecha apertura (Pregrado)</label>
-                    <DatePicker id="fechaAperturaPreg" v-model="product.fechaAperturaPreg" :invalid="showError('fechaAperturaPreg')" @update:modelValue="onBlur('fechaAperturaPreg')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaAperturaPreg" v-model="product.fechaAperturaPreg" :invalid="showError('fechaAperturaPreg')" @update:modelValue="onBlur('fechaAperturaPreg')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaAperturaPreg')" class="text-red-500">{{ errors.fechaAperturaPreg }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreDocentePreg">Fecha cierre solicitud de programación (Pregrado)</label>
-                    <DatePicker id="fechaCierreDocentePreg" v-model="product.fechaCierreDocentePreg" :invalid="showError('fechaCierreDocentePreg')" @update:modelValue="onBlur('fechaCierreDocentePreg')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaCierreDocentePreg" v-model="product.fechaCierreDocentePreg" :invalid="showError('fechaCierreDocentePreg')" @update:modelValue="onBlur('fechaCierreDocentePreg')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaCierreDocentePreg')" class="text-red-500">{{ errors.fechaCierreDocentePreg }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreJefeDepart">Fecha cierre revisión jefe de departamento</label>
-                    <DatePicker id="fechaCierreJefeDepart" v-model="product.fechaCierreJefeDepart" :invalid="showError('fechaCierreJefeDepart')" @update:modelValue="onBlur('fechaCierreJefeDepart')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaCierreJefeDepart" v-model="product.fechaCierreJefeDepart" :invalid="showError('fechaCierreJefeDepart')" @update:modelValue="onBlur('fechaCierreJefeDepart')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaCierreJefeDepart')" class="text-red-500">{{ errors.fechaCierreJefeDepart }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreDecano">Fecha cierre revisión decano</label>
-                    <DatePicker id="fechaCierreDecano" v-model="product.fechaCierreDecano" :invalid="showError('fechaCierreDecano')" @update:modelValue="onBlur('fechaCierreDecano')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaCierreDecano" v-model="product.fechaCierreDecano" :invalid="showError('fechaCierreDecano')" @update:modelValue="onBlur('fechaCierreDecano')" dateFormat="yy-mm-dd" showIcon />
                     <small v-if="showError('fechaCierreDecano')" class="text-red-500">{{ errors.fechaCierreDecano }}</small>
                 </div>
 
                 <!-- Postgrado -->
                 <div class="flex flex-col gap-2">
                     <label for="fechaAperturaPostg">Fecha apertura (Postgrado)</label>
-                    <DatePicker id="fechaAperturaPostg" v-model="product.fechaAperturaPostg" :invalid="showError('fechaAperturaPostg')" @update:modelValue="onBlur('fechaAperturaPostg')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaAperturaPostg" v-model="product.fechaAperturaPostg" :invalid="showError('fechaAperturaPostg')" @update:modelValue="onBlur('fechaAperturaPostg')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaAperturaPostg')" class="text-red-500">{{ errors.fechaAperturaPostg }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreDocentePostg">Fecha cierre solicitud de programación (Postgrado)</label>
-                    <DatePicker id="fechaCierreDocentePostg" v-model="product.fechaCierreDocentePostg" :invalid="showError('fechaCierreDocentePostg')" @update:modelValue="onBlur('fechaCierreDocentePostg')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaCierreDocentePostg" v-model="product.fechaCierreDocentePostg" :invalid="showError('fechaCierreDocentePostg')" @update:modelValue="onBlur('fechaCierreDocentePostg')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaCierreDocentePostg')" class="text-red-500">{{ errors.fechaCierreDocentePostg }}</small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreCoordinadorPostg">Fecha cierre revisión coordinardor postgrados</label>
                     <DatePicker
-                        id="fechaCierreCoordinadorPostg"
+                        inputId="fechaCierreCoordinadorPostg"
                         v-model="product.fechaCierreCoordinadorPostg"
                         :invalid="showError('fechaCierreCoordinadorPostg')"
                         @update:modelValue="onBlur('fechaCierreCoordinadorPostg')"
@@ -620,7 +616,7 @@ onMounted(() => getProducts());
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="fechaCierreJefePostg">Fecha cierre jefe postgrados</label>
-                    <DatePicker id="fechaCierreJefePostg" v-model="product.fechaCierreJefePostg" :invalid="showError('fechaCierreJefePostg')" @update:modelValue="onBlur('fechaCierreJefePostg')" dateFormat="yy-mm-dd" showIcon fluid />
+                    <DatePicker inputId="fechaCierreJefePostg" v-model="product.fechaCierreJefePostg" :invalid="showError('fechaCierreJefePostg')" @update:modelValue="onBlur('fechaCierreJefePostg')" dateFormat="yy-mm-dd" showIcon fluid />
                     <small v-if="showError('fechaCierreJefePostg')" class="text-red-500">{{ errors.fechaCierreJefePostg }}</small>
                 </div>
             </div>

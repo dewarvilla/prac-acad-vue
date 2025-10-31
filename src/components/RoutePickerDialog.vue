@@ -3,10 +3,8 @@ import { ref, reactive, computed, watch, nextTick } from 'vue';
 import { Loader } from '@googlemaps/js-api-loader';
 import axios from 'axios';
 
-// Usa tu base existente
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api/v1';
 
-// === Loader solo con Maps JS (sin Places, sin Advanced) ===
 let gmapsPromise = null;
 function ensureGoogle() {
     if (gmapsPromise) return gmapsPromise;
@@ -18,23 +16,34 @@ function ensureGoogle() {
     }
     const loader = new Loader({
         apiKey: key,
-        version: 'weekly', // solo Maps JS
-        libraries: [] // <— sin 'places'
+        version: 'weekly',
+        libraries: ['geometry', 'marker']
     });
+
     gmapsPromise = loader.load();
     return gmapsPromise;
 }
 
-// ====== Props / Emits ======
+/* ===== Categorías de vehículo ===== */
+const CATEGORIAS = [
+    { id: 'I', label: 'Categoría I (Automóvil)' },
+    { id: 'II', label: 'Categoría II (Bus o Camión 2 ejes)' },
+    { id: 'III', label: 'Categoría III (Camión 3 ejes)' },
+    { id: 'IV', label: 'Categoría IV (Camión 4 ejes)' },
+    { id: 'V', label: 'Categoría V (Camión 5 ejes)' },
+    { id: 'VI', label: 'Categoría VI (Camión 6 ejes)' },
+    { id: 'VII', label: 'Categoría VII (Ejes adicionales)' }
+];
+
+/* ===== Props / Emits ===== */
 const props = defineProps({
     visible: { type: Boolean, default: false },
     sedes: { type: Array, default: () => [] },
-    /** Si viene, el origen queda bloqueado (último destino). {lat,lng,desc?,placeId?} */
     originOverride: { type: Object, default: null }
 });
 const emit = defineEmits(['update:visible', 'picked']);
 
-// ====== Estado ======
+/* ===== Estado ===== */
 const justiRef = ref(null);
 const state = reactive({
     justificacion: '',
@@ -42,10 +51,11 @@ const state = reactive({
     destino: { lat: null, lng: null, placeId: null, desc: '' },
     distancia_m: null,
     duracion_s: null,
-    polyline: null
+    polyline: null,
+    categoriaPeaje: 'I'
 });
 
-// ====== Derivados ======
+/* ===== Derivados ===== */
 const hasOverride = computed(() => !!props.originOverride && props.originOverride.lat != null && props.originOverride.lng != null);
 const originLatLng = computed(() => {
     if (hasOverride.value) {
@@ -59,7 +69,7 @@ const originText = computed(() => originLatLng.value?.desc || '—');
 const destinoDesc = computed(() => state.destino.desc || (state.destino.lat != null ? `${state.destino.lat}, ${state.destino.lng}` : 'Clic en el mapa para elegir destino'));
 const canSave = computed(() => !!state.justificacion && !!originLatLng.value && state.destino.lat != null && state.destino.lng != null);
 
-// ====== Google Map ======
+/* ===== Google Map ===== */
 const mapEl = ref(null);
 let map = null;
 let originMarker = null;
@@ -72,10 +82,12 @@ function clearPolyline() {
         routePolyline = null;
     }
 }
+
 function drawPolyline(path) {
     clearPolyline();
     routePolyline = new google.maps.Polyline({
         path,
+        strokeColor: '#4285F4',
         strokeOpacity: 1.0,
         strokeWeight: 4
     });
@@ -118,45 +130,64 @@ async function initMap() {
 
     const center = originLatLng.value ? { lat: originLatLng.value.lat, lng: originLatLng.value.lng } : { lat: 8.75, lng: -75.88 };
 
-    if (!map) {
-        map = new google.maps.Map(mapEl.value, {
-            center,
-            zoom: 12,
-            mapTypeControl: false,
-            streetViewControl: false,
-            fullscreenControl: true
-        });
+    destroyMap();
 
-        // click en el mapa -> destino + calcular ruta contra tu backend
+    map = new google.maps.Map(mapEl.value, {
+        center,
+        zoom: 12,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true,
+        ...(import.meta.env.VITE_GMAPS_MAP_ID ? { mapId: import.meta.env.VITE_GMAPS_MAP_ID } : {})
+    });
+
+    google.maps.event.addListenerOnce(map, 'tilesloaded', () => {
+        google.maps.event.trigger(map, 'resize');
+    });
+
+    await nextTick();
+    setTimeout(() => {
         map.addListener('click', async (e) => {
-            state.destino = { lat: e.latLng.lat(), lng: e.latLng.lng(), placeId: null, desc: '' };
+            state.destino = {
+                lat: e.latLng.lat(),
+                lng: e.latLng.lng(),
+                placeId: null,
+                desc: ''
+            };
             paintDestMarker();
             await computeRouteBackend();
         });
-    } else {
-        google.maps.event.trigger(map, 'resize');
-        map.setCenter(center);
-    }
+    }, 400);
 
     paintOriginMarker();
 }
 
+/* === AdvancedMarkerElement compatible === */
 function paintOriginMarker() {
     const o = originLatLng.value;
     if (!map || !o) return;
     const pos = { lat: o.lat, lng: o.lng };
-    if (!originMarker) originMarker = new google.maps.Marker({ position: pos, map, label: 'O' });
-    else originMarker.setPosition(pos);
+    const AdvMarker = google.maps.marker?.AdvancedMarkerElement;
+    if (AdvMarker) {
+        originMarker = new AdvMarker({ position: pos, map, title: 'Origen' });
+    } else {
+        originMarker = new google.maps.Marker({ position: pos, map, label: 'O' });
+    }
 }
 
 function paintDestMarker() {
     if (!map || state.destino.lat == null) return;
     const pos = { lat: state.destino.lat, lng: state.destino.lng };
-    if (!destMarker) destMarker = new google.maps.Marker({ position: pos, map });
-    else destMarker.setPosition(pos);
+    const AdvMarker = google.maps.marker?.AdvancedMarkerElement;
+    if (AdvMarker) {
+        if (!destMarker) destMarker = new AdvMarker({ position: pos, map, title: 'Destino' });
+        else destMarker.position = pos;
+    } else {
+        if (!destMarker) destMarker = new google.maps.Marker({ position: pos, map, label: 'D' });
+        else destMarker.setPosition(pos);
+    }
 }
 
-// ====== Tu backend calcula distancia/duración/polyline ======
 async function computeRouteBackend() {
     const o = originLatLng.value;
     if (!o || state.destino.lat == null) return;
@@ -200,62 +231,32 @@ function resetDestino() {
     state.distancia_m = null;
     state.duracion_s = null;
     state.polyline = null;
+
     if (destMarker) {
-        destMarker.setMap(null);
+        destMarker.setMap?.(null);
         destMarker = null;
     }
     clearPolyline();
 }
+
 function destroyMap() {
     if (destMarker) {
-        destMarker.setMap(null);
+        destMarker.setMap?.(null);
         destMarker = null;
     }
     if (originMarker) {
-        originMarker.setMap(null);
+        originMarker.setMap?.(null);
         originMarker = null;
     }
     clearPolyline();
     map = null;
 }
 
-// ====== Watchers ======
-watch(
-    () => state.origen,
-    () => {
-        if (hasOverride.value) return;
-        resetDestino();
-        if (map && originLatLng.value) {
-            paintOriginMarker();
-            map.setCenter({ lat: originLatLng.value.lat, lng: originLatLng.value.lng });
-        }
-    }
-);
-
-watch(
-    () => props.originOverride,
-    async () => {
-        state.justificacion = '';
-        resetDestino();
-        destroyMap();
-        await nextTick();
-        requestAnimationFrame(async () => {
-            await initMap();
-            setTimeout(() => {
-                if (map && window.google?.maps) {
-                    google.maps.event.trigger(map, 'resize');
-                    map.setCenter(originLatLng.value ? { lat: originLatLng.value.lat, lng: originLatLng.value.lng } : { lat: 8.75, lng: -75.88 });
-                }
-            }, 120);
-        });
-    }
-);
-
+/* ===== Watchers ===== */
 watch(
     () => props.visible,
     async (v) => {
         if (v) {
-            // setear origen por defecto si no hay override
             if (!hasOverride.value && !state.origen && props.sedes?.length) {
                 state.origen = props.sedes[0].id;
             }
@@ -263,18 +264,9 @@ watch(
             resetDestino();
             destroyMap();
             await nextTick();
-            justiRef.value?.$el?.focus?.();
-            justiRef.value?.focus?.();
-            requestAnimationFrame(async () => {
+            setTimeout(async () => {
                 await initMap();
-                setTimeout(() => {
-                    if (map && window.google?.maps) {
-                        google.maps.event.trigger(map, 'resize');
-                        const c = originLatLng.value ? { lat: originLatLng.value.lat, lng: originLatLng.value.lng } : { lat: 8.75, lng: -75.88 };
-                        map.setCenter(c);
-                    }
-                }, 120);
-            });
+            }, 600);
         } else {
             resetDestino();
             destroyMap();
@@ -282,7 +274,7 @@ watch(
     }
 );
 
-// ====== Guardar ======
+/* ===== Guardar ===== */
 async function save() {
     const o = originLatLng.value;
     if (!o || state.destino.lat == null || state.destino.lng == null) return;
@@ -300,7 +292,8 @@ async function save() {
         justificacion: state.justificacion,
         distancia_m: state.distancia_m,
         duracion_s: state.duracion_s,
-        polyline: state.polyline
+        polyline: state.polyline,
+        categoria_peaje: state.categoriaPeaje
     });
     emit('update:visible', false);
 }
@@ -309,40 +302,53 @@ async function save() {
 <template>
     <Dialog :visible="visible" @update:visible="(v) => emit('update:visible', v)" header="Definir recorrido" :modal="true" :style="{ width: '48rem' }">
         <div class="flex flex-col gap-4">
+            <!-- === Justificación === -->
             <div class="flex flex-col gap-2">
-                <label for="just" class="font-medium">Justificación del recorrido</label>
-                <Textarea id="just" ref="justiRef" v-model.trim="state.justificacion" autoResize placeholder="¿Por qué se requiere este recorrido?" />
+                <label for="justificacion" class="font-medium">Justificación del recorrido</label>
+                <Textarea id="justificacion" ref="justiRef" v-model.trim="state.justificacion" autoResize placeholder="¿Por qué se requiere este recorrido?" />
             </div>
 
+            <!-- === Origen === -->
             <div class="flex flex-col gap-2">
-                <label class="font-medium">Origen</label>
+                <label for="origen" class="font-medium">Origen</label>
                 <template v-if="hasOverride">
-                    <InputText :value="originText" disabled />
+                    <InputText id="origen" :value="originText" disabled />
                     <small class="text-gray-500">El origen está bloqueado al último destino.</small>
                 </template>
                 <template v-else>
-                    <Dropdown v-model="state.origen" :options="sedes" optionLabel="label" optionValue="id" placeholder="Selecciona la sede" />
+                    <Select id="origen" v-model="state.origen" :options="sedes" optionLabel="label" optionValue="id" placeholder="Selecciona la sede" />
                     <small class="text-gray-500">El origen se toma de la sede seleccionada.</small>
                 </template>
             </div>
 
+            <!-- === Categoría de vehículo === -->
             <div class="flex flex-col gap-2">
-                <label class="font-medium">Destino</label>
-                <InputText :value="destinoDesc" disabled />
+                <label for="categoriaPeaje" class="font-medium">Categoría de vehículo</label>
+                <Select id="categoriaPeaje" v-model="state.categoriaPeaje" :options="CATEGORIAS" optionLabel="label" optionValue="id" />
+                <small class="text-gray-500">Se usará para calcular el valor total de peajes.</small>
+            </div>
+
+            <!-- === Destino === -->
+            <div class="flex flex-col gap-2">
+                <label for="destino" class="font-medium">Destino</label>
+                <InputText id="destino" :value="destinoDesc" disabled />
                 <small class="text-gray-500">Haz clic en el mapa para fijar el destino.</small>
             </div>
 
-            <div v-if="state.distancia_m != null || state.duracion_s != null" class="text-sm text-gray-700">
+            <!-- === Información de distancia, duración === -->
+            <div v-if="state.distancia_m != null || state.duracion_s != null" class="text-sm text-gray-700" id="infoRuta">
                 <span v-if="state.distancia_m != null"><b>Distancia:</b> {{ (state.distancia_m / 1000).toFixed(2) }} km</span>
                 <span v-if="state.duracion_s != null" class="ml-3"><b>Duración:</b> {{ Math.round(state.duracion_s / 60) }} min</span>
             </div>
 
+            <!-- === Botones === -->
             <div class="flex items-center gap-2">
-                <Button label="Cancelar" icon="pi pi-times" text @click="$emit('update:visible', false)" />
-                <Button label="Guardar recorrido" icon="pi pi-check" :disabled="!canSave" @click="save" />
+                <Button label="Cancelar" icon="pi pi-times" text @click="$emit('update:visible', false)" :pt="{ root: { 'aria-label': 'Cancelar definición de recorrido' } }" />
+                <Button label="Guardar recorrido" icon="pi pi-check" :disabled="!canSave" @click="save" :pt="{ root: { 'aria-label': 'Guardar recorrido definido' } }" />
             </div>
 
-            <div class="rounded overflow-hidden border">
+            <!-- === Mapa === -->
+            <div class="rounded overflow-hidden border" id="mapaRecorrido">
                 <div ref="mapEl" style="height: 360px; width: 100%"></div>
             </div>
         </div>

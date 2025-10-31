@@ -3,8 +3,8 @@ import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import { useToast } from 'primevue/usetoast';
 import axios from 'axios';
 import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
+import RouteMiniMap from '@/components/RouteMiniMap.vue';
 
-/* ========= Cache/ayudas para métricas de rutas en Detalles ========= */
 const routeEstimates = reactive({}); // { [key]: { loading?, error?, distance_m?, duration_s? } }
 const tableUid = `prog-${Math.random().toString(36).slice(2)}`;
 const uid = Math.random().toString(36).slice(2);
@@ -12,7 +12,13 @@ const recId = `recursos-${uid}`;
 const jusId = `justificacion-${uid}`;
 const numEstId = `num-est-${uid}`;
 
-// helpers para el “select all”
+/* ========= API ========= */
+const API_BASE = 'http://127.0.0.1:8000/api/v1';
+const API_PROG = `${API_BASE}/programaciones`;
+const API_CRE = `${API_BASE}/creaciones`;
+
+const toast = useToast();
+
 const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
 const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
 function toggleAll(e) {
@@ -20,7 +26,6 @@ function toggleAll(e) {
     else selected.value = [];
 }
 
-/** Clave estable por ruta (incluye coords para evitar colisiones si no hay id) */
 function kRoute(prog, r, i) {
     const oLat = Number(r?.origen_lat),
         oLng = Number(r?.origen_lng);
@@ -30,7 +35,6 @@ function kRoute(prog, r, i) {
     return `${prog?.id ?? 'p'}:${idPart}:${isFinite(oLat) ? oLat.toFixed(5) : 'x'},${isFinite(oLng) ? oLng.toFixed(5) : 'x'}>${isFinite(dLat) ? dLat.toFixed(5) : 'x'},${isFinite(dLng) ? dLng.toFixed(5) : 'x'}`;
 }
 
-/* Helpers de formato */
 function fmtKm(m) {
     const v = Number(m);
     if (!isFinite(v) || v <= 0) return '0.00 km';
@@ -42,7 +46,6 @@ function fmtMin(s) {
     return `${Math.round(v / 60)} min`;
 }
 
-/** Calcula distancia/duración en backend para una ruta sin métricas */
 async function fetchEstimateForRoute(r, key) {
     const oLat = Number(r?.origen_lat),
         oLng = Number(r?.origen_lng);
@@ -68,14 +71,7 @@ async function fetchEstimateForRoute(r, key) {
     }
 }
 
-/* ========= API ========= */
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
-const API_PROG = `${API_BASE}/programaciones`;
-const API_CRE = `${API_BASE}/creaciones`;
-
-const toast = useToast();
-
-/* ===== SEDES (origen fijo) ===== */
+/* ===== SEDES ===== */
 const SEDES = [
     { id: 'monteria', label: 'Montería (Sede principal)', lat: 8.789478076658922, lng: -75.85682013983686, desc: 'Campus Montería' },
     { id: 'berastegui', label: 'Berástegui', lat: 8.882344202163397, lng: -75.7018615673633, desc: 'Sede Berástegüí' },
@@ -142,7 +138,6 @@ async function getProducts(opts = {}) {
             total.value = 0;
         }
     } finally {
-        // Limpia selección con ids que ya no existen en la tabla
         const idsSet = new Set((products.value ?? []).map((p) => p.id));
         if (Array.isArray(selected.value)) {
             selected.value = selected.value.filter((s) => idsSet.has(s.id));
@@ -179,7 +174,6 @@ watch(search, () => {
         scheduleFetch();
     }
 });
-// ==== Autocomplete liviano de CREACIONES====
 const creQuery = ref(''); // texto visible
 const creSugs = ref([]); // sugerencias del endpoint
 const loadingCre = ref(false);
@@ -187,7 +181,6 @@ const showCrePanel = ref(false);
 const hiCre = ref(-1); // índice resaltado
 let creTimer = null;
 const CRE_DEBOUNCE = 250;
-// id único para el listbox (accesibilidad)
 const creListId = `cre-listbox-${Math.random().toString(36).slice(2)}`;
 
 function openCrePanel() {
@@ -308,56 +301,57 @@ const details = ref([]);
 
 async function openDetails() {
     if (!selected.value.length) return;
-
-    // ids aún visibles + sin duplicados
     const currentIds = new Set((products.value || []).map((p) => p.id));
     const ids = [...new Set(selected.value.filter((r) => currentIds.has(r.id)).map((r) => r.id))];
     if (!ids.length) return;
 
     detailsLoading.value = true;
     details.value = [];
-
-    // reset cache de estimaciones
     Object.keys(routeEstimates).forEach((k) => delete routeEstimates[k]);
 
-    // 1) Programaciones
-    const progReqs = ids.map((id) => axios.get(`${API_PROG}/${id}`));
-    const progResults = await Promise.allSettled(progReqs);
-    const progs = progResults
-        .filter((r) => r.status === 'fulfilled')
-        .map((r) => r.value.data?.data ?? r.value.data)
-        .filter(Boolean);
+    try {
+        const progReqs = ids.map((id) => axios.get(`${API_PROG}/${id}`));
+        const progResults = await Promise.allSettled(progReqs);
 
-    // 2) Rutas por programación
-    const routeReqs = progs.map((p) => axios.get(`${API_BASE}/rutas`, { params: { programacion_id: p.id, page: 1, per_page: 200 } }));
-    const routeResults = await Promise.allSettled(routeReqs);
+        const progs = progResults
+            .filter((r) => r.status === 'fulfilled')
+            .map((r) => r.value.data?.data ?? r.value.data)
+            .filter(Boolean);
+        const routeReqs = progs.map((p) => axios.get(`${API_BASE}/rutas`, { params: { programacion_id: p.id, page: 1, per_page: 200 } }));
+        const routeResults = await Promise.allSettled(routeReqs);
+        for (const [i, p] of progs.entries()) {
+            p.routes = routeResults[i].status === 'fulfilled' ? ((Array.isArray(routeResults[i].value.data) ? routeResults[i].value.data : routeResults[i].value.data?.data) ?? []) : [];
 
-    // 3) Unir y lanzar cálculos cuando falten métricas
-    progs.forEach((p, i) => {
-        p.routes = routeResults[i].status === 'fulfilled' ? ((Array.isArray(routeResults[i].value.data) ? routeResults[i].value.data : routeResults[i].value.data?.data) ?? []) : [];
-
-        p.routes.forEach((r, idx) => {
-            if (r?.distancia_m == null || r?.duracion_s == null) {
-                const key = kRoute(p, r, idx);
-                fetchEstimateForRoute(r, key);
+            for (const r of p.routes) {
+                try {
+                    const { data } = await axios.get(`${API_BASE}/rutas/${r.id}`);
+                    Object.assign(r, data?.data ?? data);
+                } catch {
+                    console.warn(`No se pudo actualizar la ruta ${r.id}`);
+                }
             }
-        });
-    });
+            p.routes.forEach((r, idx) => {
+                if (r?.distancia_m == null || r?.duracion_s == null) {
+                    const key = kRoute(p, r, idx);
+                    fetchEstimateForRoute(r, key);
+                }
+            });
+        }
+        details.value = progs;
 
-    details.value = progs;
-
-    const fails = progResults.length - progs.length;
-    if (fails) {
-        toast.add({
-            severity: 'warn',
-            summary: 'Algunos detalles fallaron',
-            detail: `No se encontraron ${fails} programación(es).`,
-            life: 4000
-        });
+        const fails = progResults.length - progs.length;
+        if (fails) {
+            toast.add({
+                severity: 'warn',
+                summary: 'Algunos detalles fallaron',
+                detail: `No se encontraron ${fails} programación(es).`,
+                life: 4000
+            });
+        }
+    } finally {
+        detailsDialog.value = true;
+        detailsLoading.value = false;
     }
-
-    detailsDialog.value = true;
-    detailsLoading.value = false;
 }
 
 /* ========================= CRUD crear/editar ========================= */
@@ -376,8 +370,6 @@ const product = ref({
     fechaFinalizacion: '',
     numeroEstudiantes: ''
 });
-
-/* ==== Recorridos dentro del modal ==== */
 const routesDraft = ref([]); // {id?, ...payload, _state?: 'new'|'keep'|'delete'}
 const routeDlg = ref(false);
 
@@ -402,8 +394,6 @@ const nextRouteOrigin = computed(() => {
     if (lat == null || lng == null) return null;
     return { lat: Number(lat), lng: Number(lng), desc: last?.destino_desc || 'Último destino', placeId: last?.destino_place_id || null };
 });
-
-/* === Helpers para regreso automático (solo al guardar) === */
 function coordsEqual(a, b, tol = 1e-6) {
     if (!a || !b) return false;
     const dLat = Math.abs(Number(a.lat) - Number(b.lat));
@@ -420,9 +410,8 @@ function lastDestFromList(list) {
     const r = list[list.length - 1];
     return { lat: r.destino_lat, lng: r.destino_lng, desc: r.destino_desc || '', placeId: r.destino_place_id || null };
 }
-/** Extiende batch de creación con regreso al origen si hace falta */
 function finalizeRoutesForCreate(progId, currentToCreate) {
-    const list = visibleRoutes(); // keep + new (sin delete)
+    /* const list = visibleRoutes(); // keep + new (sin delete)
     if (!list.length) return currentToCreate;
 
     const firstO = firstOriginFromList(list);
@@ -452,7 +441,8 @@ function finalizeRoutesForCreate(progId, currentToCreate) {
         _state: 'new'
     });
 
-    return extended;
+    return extended; */
+    return currentToCreate;
 }
 
 const errors = reactive({
@@ -472,17 +462,40 @@ const touched = reactive({
     numeroEstudiantes: false
 });
 const rules = {
-    creacion: [(v) => !!v || 'Selecciona una práctica (Creación).'],
+    creacion: [(v) => !!v || 'Selecciona una práctica.'],
     justificacion: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
-    fechaInicio: [(v) => !!v || 'Requerido.'],
-    fechaFinalizacion: [(v) => !!v || 'Requerido.'],
-    numeroEstudiantes: [(v) => (v !== null && v !== '') || 'Requerido.', (v) => (Number.isInteger(+v) && +v > 0) || 'Debe ser un entero mayor que 0.']
+    fechaInicio: [
+        (v) => !!v || 'Requerido.',
+        (v) => {
+            if (!v) return true;
+            const hoyStr = new Date().toISOString().split('T')[0];
+            const iniStr = new Date(v).toISOString().split('T')[0];
+            return iniStr >= hoyStr || 'La fecha de inicio no puede ser anterior a hoy.';
+        },
+        (v) => {
+            const fin = product.value.fechaFinalizacion ? new Date(product.value.fechaFinalizacion) : null;
+            const ini = v ? new Date(v) : null;
+            if (ini && fin && ini > fin) return 'La fecha de inicio no puede ser posterior a la finalización.';
+            return true;
+        }
+    ],
+    fechaFinalizacion: [
+        (v) => !!v || 'Requerido.',
+        (v) => {
+            const ini = product.value.fechaInicio ? new Date(product.value.fechaInicio) : null;
+            const fin = v ? new Date(v) : null;
+            if (ini && fin && fin < ini) return 'La fecha de finalización no puede ser anterior a la de inicio.';
+            return true;
+        }
+    ],
+    numeroEstudiantes: [(v) => (v !== null && v !== undefined && v !== '' && !isNaN(v)) || 'Requerido.', (v) => Number(v) > 0 || 'Debe ser un número mayor que 0.']
 };
 function validateField(f) {
     errors[f] = '';
+    const val = product.value[f];
     for (const test of rules[f] || []) {
-        const ok = test(product.value[f]);
+        const ok = test(val);
         if (ok !== true) {
             errors[f] = ok;
             break;
@@ -570,16 +583,18 @@ async function editProduct(row) {
         routesDraft.value = items.map((it) => ({
             id: it.id,
             programacion_id: row.id,
-            origen_place_id: it.origen_place_id ?? null,
-            origen_desc: it.origen_desc ?? '',
-            origen_lat: it.origen_lat ?? null,
-            origen_lng: it.origen_lng ?? null,
-            destino_place_id: it.destino_place_id ?? null,
-            destino_desc: it.destino_desc ?? '',
-            destino_lat: it.destino_lat ?? null,
-            destino_lng: it.destino_lng ?? null,
-            distancia_m: it.distancia_m ?? null,
-            duracion_s: it.duracion_s ?? null,
+            origen_place_id: it.origen?.placeId ?? null,
+            origen_desc: it.origen?.desc ?? '',
+            origen_lat: it.origen?.lat ?? null,
+            origen_lng: it.origen?.lng ?? null,
+            destino_place_id: it.destino?.placeId ?? null,
+            destino_desc: it.destino?.desc ?? '',
+            destino_lat: it.destino?.lat ?? null,
+            destino_lng: it.destino?.lng ?? null,
+            distancia_m: it.distanciaM ?? null,
+            duracion_s: it.duracionS ?? null,
+            numero_peajes: it.numeroPeajes ?? 0,
+            valor_peajes: it.valorPeajes ?? 0,
             polyline: it.polyline ?? null,
             justificacion: it.justificacion ?? '',
             _state: 'keep'
@@ -595,7 +610,12 @@ async function editProduct(row) {
 async function saveProduct() {
     if (saving.value) return;
     if (!validateAll()) {
-        toast.add({ severity: 'warn', summary: 'Valida el formulario', detail: 'Corrige los campos marcados.', life: 3000 });
+        toast.add({
+            severity: 'warn',
+            summary: 'Valida el formulario',
+            detail: 'Corrige los campos marcados.',
+            life: 3000
+        });
         return;
     }
 
@@ -615,30 +635,42 @@ async function saveProduct() {
         saving.value = true;
 
         if (product.value.id) {
-            // EDITAR
             await axios.patch(`${API_PROG}/${product.value.id}`, payload);
             const progId = product.value.id;
-
-            // nuevas
             let toCreate = routesDraft.value.filter((r) => r._state === 'new');
-            // regreso auto si aplica
             toCreate = finalizeRoutesForCreate(progId, toCreate);
-            // eliminadas
             const toDelete = routesDraft.value.filter((r) => r._state === 'delete' && r.id);
 
             const reqs = [];
-            toCreate.forEach((r) => {
+            for (const r of toCreate) {
                 const p = { ...r, programacion_id: progId };
                 delete p._state;
                 delete p.id;
-                reqs.push(axios.post(`${API_BASE}/rutas`, p));
-            });
-            toDelete.forEach((r) => reqs.push(axios.delete(`${API_BASE}/rutas/${r.id}`)));
+                reqs.push(
+                    axios.post(`${API_BASE}/rutas`, p).then(async (res) => {
+                        const rutaId = res.data?.data?.id ?? res.data?.id;
+                        if (rutaId) {
+                            try {
+                                await axios.post(`${API_BASE}/rutas/${rutaId}/peajes/sync`, {
+                                    categoria: r.categoria_peaje || 'I'
+                                });
+                            } catch {
+                                console.warn(`No se pudieron sincronizar peajes para ruta ${rutaId}`);
+                            }
+                        }
+                    })
+                );
+            }
+            // --- eliminar rutas marcadas ---
+            for (const r of toDelete) {
+                reqs.push(axios.delete(`${API_BASE}/rutas/${r.id}`));
+            }
+
             if (reqs.length) await Promise.allSettled(reqs);
 
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            // CREAR
+            // === CREAR NUEVO ===
             const { data } = await axios.post(API_PROG, payload);
             const created = data?.data ?? data ?? {};
             const progId = created.id;
@@ -646,14 +678,31 @@ async function saveProduct() {
             if (progId && routesDraft.value.length) {
                 let toCreate = routesDraft.value.filter((r) => r._state === 'new');
                 toCreate = finalizeRoutesForCreate(progId, toCreate);
-                const reqs = toCreate.map((r) => {
+
+                const reqs = [];
+                for (const r of toCreate) {
                     const p = { ...r, programacion_id: progId };
                     delete p._state;
                     delete p.id;
-                    return axios.post(`${API_BASE}/rutas`, p);
-                });
+                    reqs.push(
+                        axios.post(`${API_BASE}/rutas`, p).then(async (res) => {
+                            const rutaId = res.data?.data?.id ?? res.data?.id;
+                            if (rutaId) {
+                                try {
+                                    await axios.post(`${API_BASE}/rutas/${rutaId}/peajes/sync`, {
+                                        categoria: r.categoria_peaje || 'I'
+                                    });
+                                } catch {
+                                    console.warn(`No se pudieron sincronizar peajes para ruta ${rutaId}`);
+                                }
+                            }
+                        })
+                    );
+                }
+
                 await Promise.allSettled(reqs);
             }
+
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
 
@@ -670,7 +719,12 @@ async function saveProduct() {
             errors.fechaFinalizacion = data.errors.fecha_finalizacion?.[0] ?? errors.fechaFinalizacion;
             errors.numeroEstudiantes = data.errors.numero_estudiantes?.[0] ?? errors.numeroEstudiantes;
         }
-        toast.add({ severity: 'error', summary: 'No se pudo guardar', detail: data?.message || e.message, life: 5000 });
+        toast.add({
+            severity: 'error',
+            summary: 'No se pudo guardar',
+            detail: data?.message || e.message,
+            life: 5000
+        });
     } finally {
         saving.value = false;
     }
@@ -696,7 +750,9 @@ async function deleteProduct() {
         current.value = null;
     }
 }
+/* ===== Borrado en lote ===== */
 const bulkDeleteDialog = ref(false);
+
 function confirmBulkDelete() {
     if (!selected.value.length) return;
     bulkDeleteDialog.value = true;
@@ -709,7 +765,7 @@ async function bulkDelete() {
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
         toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
-        await refreshAfterDelete(ids.length);
+        await getProducts({ force: true });
     } catch (e) {
         const status = e?.response?.status;
         const msg = e?.response?.data?.message || e.message;
@@ -723,6 +779,7 @@ async function bulkDelete() {
         bulkDeleteDialog.value = false;
     }
 }
+
 function refreshAfterDelete(deletedCount = 1) {
     total.value = Math.max(0, Number(total.value) - Number(deletedCount));
     const r = Number(rows.value) || 10;
@@ -973,7 +1030,16 @@ onMounted(() => getProducts());
                 <!-- Número de estudiantes -->
                 <div class="flex flex-col gap-2">
                     <label :for="numEstId">Número de estudiantes</label>
-                    <InputNumber :inputId="numEstId" v-model="product.numeroEstudiantes" :min="0" :useGrouping="false" :class="{ 'p-invalid': showError('numeroEstudiantes') }" @blur="onBlur('numeroEstudiantes')" fluid />
+                    <InputNumber
+                        :inputId="numEstId"
+                        v-model="product.numeroEstudiantes"
+                        :min="0"
+                        :useGrouping="false"
+                        :class="{ 'p-invalid': showError('numeroEstudiantes') }"
+                        @update:modelValue="validateField('numeroEstudiantes')"
+                        @blur="onBlur('numeroEstudiantes')"
+                        fluid
+                    />
                     <small v-if="showError('numeroEstudiantes')" class="text-red-500">
                         {{ errors.numeroEstudiantes }}
                     </small>
@@ -1001,20 +1067,35 @@ onMounted(() => getProducts());
                 <!-- Recorridos -->
                 <div class="mt-2" v-if="product.requiereTransporte">
                     <div class="flex items-center justify-between mb-2">
-                        <label class="font-medium">Recorridos</label>
-                        <Button size="small" icon="pi pi-plus" label="Añadir recorrido" @click="routeDlg = true" />
+                        <span id="recorridos-label" class="font-medium">Recorridos</span>
+                        <Button size="small" icon="pi pi-plus" label="Añadir recorrido" @click="routeDlg = true" :pt="{ root: { 'aria-labelledby': 'recorridos-label' } }" />
                     </div>
 
                     <div v-if="!visibleRoutes().length" class="text-gray-500 text-sm">No hay recorridos definidos.</div>
 
-                    <div v-else class="space-y-2">
-                        <div v-for="(r, idx) in visibleRoutes()" :key="idx" class="border rounded p-2">
+                    <div v-else class="space-y-3">
+                        <div v-for="(r, idx) in visibleRoutes()" :key="r.id ?? idx" class="border rounded p-2 space-y-2">
                             <div class="flex items-center justify-between">
                                 <div class="text-sm">
-                                    <div class="mt-1"><b>Justificación:</b> {{ r.justificacion }}</div>
+                                    <div><b>Justificación:</b> {{ r.justificacion }}</div>
+                                    <div class="mt-1 space-x-4">
+                                        <span v-if="r.distancia_m != null"><b>Distancia:</b> {{ (r.distancia_m / 1000).toFixed(2) }} km</span>
+                                        <span v-if="r.duracion_s != null"><b>Duración:</b> {{ Math.round(r.duracion_s / 60) }} min</span>
+                                        <span v-if="r.numero_peajes != null"><b>Peajes:</b> {{ r.numero_peajes }}</span>
+                                        <span v-if="r.valor_peajes != null && r.valor_peajes > 0">
+                                            <b>Valor total:</b>
+                                            {{ new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP' }).format(r.valor_peajes) }}
+                                        </span>
+                                    </div>
+                                    <template v-if="r.distancia_m == null && r.duracion_s == null && r.numero_peajes == null">
+                                        <div class="text-gray-500 text-sm mt-1">Sin métricas calculadas</div>
+                                    </template>
                                 </div>
                                 <Button icon="pi pi-times" text severity="danger" @click="removeDraftRoute(routesDraft.indexOf(r))" />
                             </div>
+
+                            <!-- Mostrar mapa y peajes si la ruta ya existe -->
+                            <RouteMiniMap v-if="r.id" :ruta="r" />
                         </div>
                     </div>
                 </div>
@@ -1040,6 +1121,16 @@ onMounted(() => getProducts());
                 <Button label="Sí" icon="pi pi-check" severity="danger" @click="deleteProduct" />
             </template>
         </Dialog>
+        <!-- Confirmar eliminar en bloque -->
+        <Dialog v-model:visible="bulkDeleteDialog" header="Confirmar eliminación múltiple" :style="{ width: '28rem' }" :modal="true" appendTo="body">
+            <div>
+                ¿Seguro que deseas eliminar las <b>{{ selected.length }}</b> programaciones seleccionadas?
+            </div>
+            <template #footer>
+                <Button label="No" icon="pi pi-times" text @click="bulkDeleteDialog = false" />
+                <Button label="Sí" icon="pi pi-check" severity="danger" @click="bulkDelete" />
+            </template>
+        </Dialog>
 
         <!-- Detalles -->
         <Dialog v-model:visible="detailsDialog" header="Detalles de programación" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
@@ -1047,10 +1138,7 @@ onMounted(() => getProducts());
 
             <div v-else class="p-3 sm:p-4">
                 <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
-                    <!-- Cabecera -->
                     <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
-
-                    <!-- Info básica -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <dl class="space-y-2">
                             <div>
@@ -1084,59 +1172,23 @@ onMounted(() => getProducts());
                     </div>
 
                     <!-- Recorridos -->
-                    <div v-if="d.routes?.length" class="mt-4">
-                        <div class="text-sm font-semibold">Recorridos ({{ d.routes.length }})</div>
+                    <div v-if="d.routes?.length" class="mt-5">
+                        <div class="font-semibold mb-2">Recorridos ({{ d.routes.length }})</div>
 
-                        <!-- Totales por programación -->
-                        <div class="text-xs text-gray-600 mt-1">
-                            <b>Total</b> —
-                            <span v-if="d.routes.some((r) => r?.distancia_m != null)">
-                                {{ fmtKm(d.routes.reduce((a, r) => a + (Number(r?.distancia_m) || 0), 0)) }}
-                            </span>
-                            <span v-if="d.routes.some((r) => r?.duracion_s != null)" class="ml-2">
-                                {{ fmtMin(d.routes.reduce((a, r) => a + (Number(r?.duracion_s) || 0), 0)) }}
-                            </span>
-                        </div>
+                        <div v-for="(r, i) in d.routes" :key="r.id ?? i" class="border border-surface-300 bg-surface-50 rounded-md p-3 mb-3 text-sm">
+                            <div><b>Justificación:</b> {{ r.justificacion || '—' }}</div>
 
-                        <div class="space-y-2 mt-2">
-                            <div v-for="(r, i) in d.routes" :key="r.id ?? i" class="border rounded p-2">
-                                <!-- Origen / Destino legibles -->
-                                <div class="text-xs">
-                                    <div>
-                                        <b>Origen:</b>
-                                        {{ r.origen_desc || (r.origen_lat != null && r.origen_lng != null ? `${r.origen_lat}, ${r.origen_lng}` : '—') }}
-                                    </div>
-                                    <div>
-                                        <b>Destino:</b>
-                                        {{ r.destino_desc || (r.destino_lat != null && r.destino_lng != null ? `${r.destino_lat}, ${r.destino_lng}` : '—') }}
-                                    </div>
-                                </div>
-
-                                <!-- Justificación -->
-                                <div v-if="r.justificacion" class="mt-1 text-xs"><b>Justificación:</b> {{ r.justificacion }}</div>
-
-                                <!-- Métricas -->
-                                <div class="mt-1 text-xs">
-                                    <!-- Si la ruta YA trae métricas desde BD -->
-                                    <template v-if="r.distancia_m != null || r.duracion_s != null">
-                                        <div v-if="r.distancia_m != null"><b>Distancia:</b> {{ fmtKm(r.distancia_m) }}</div>
-                                        <div v-if="r.duracion_s != null"><b>Duración:</b> {{ fmtMin(r.duracion_s) }}</div>
-                                    </template>
-
-                                    <!-- Si NO trae métricas: usamos la estimación on-the-fly -->
-                                    <template v-else>
-                                        <template v-if="routeEstimates[kRoute(d, r, i)]?.loading"> Calculando ruta… </template>
-                                        <template v-else-if="routeEstimates[kRoute(d, r, i)]?.error">
-                                            <span class="text-red-500">No se pudo calcular la ruta.</span>
-                                        </template>
-                                        <template v-else-if="routeEstimates[kRoute(d, r, i)]">
-                                            <div><b>Distancia:</b> {{ fmtKm(routeEstimates[kRoute(d, r, i)].distance_m) }}</div>
-                                            <div><b>Duración:</b> {{ fmtMin(routeEstimates[kRoute(d, r, i)].duration_s) }}</div>
-                                        </template>
-                                        <template v-else> Sin métricas (ruta antigua o no calculada). </template>
-                                    </template>
-                                </div>
+                            <div v-if="r.distancia_m != null || r.duracion_s != null || r.numero_peajes != null" class="mt-1 flex flex-wrap gap-x-4 text-gray-800">
+                                <span v-if="r.distancia_m != null"> <b>Distancia:</b> {{ fmtKm(r.distancia_m) }} </span>
+                                <span v-if="r.duracion_s != null"> <b>Duración:</b> {{ fmtMin(r.duracion_s) }} </span>
+                                <span v-if="r.numero_peajes != null"> <b>Peajes:</b> {{ r.numero_peajes }} </span>
+                                <span v-if="r.valor_peajes != null && r.valor_peajes > 0">
+                                    <b>Valor total:</b>
+                                    {{ new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP' }).format(r.valor_peajes) }}
+                                </span>
                             </div>
+
+                            <div v-else class="text-gray-500 text-xs mt-1">Sin métricas calculadas</div>
                         </div>
                     </div>
 
@@ -1156,7 +1208,7 @@ onMounted(() => getProducts());
                         </div>
                     </div>
 
-                    <!-- Metadatos -->
+                    <!-- Auditoria -->
                     <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-500">
                         <div>
                             <div class="font-semibold">Creado</div>
@@ -1165,6 +1217,14 @@ onMounted(() => getProducts());
                         <div>
                             <div class="font-semibold">Modificado</div>
                             <div>{{ d.fechamodificacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Creación</div>
+                            <div>{{ d.ipcreacion }}</div>
+                        </div>
+                        <div>
+                            <div class="font-semibold">IP Modificación</div>
+                            <div>{{ d.ipmodificacion }}</div>
                         </div>
                     </div>
                 </div>
