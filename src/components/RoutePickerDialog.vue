@@ -5,6 +5,7 @@ import axios from 'axios';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api/v1';
 
+/* ===== Google Loader ===== */
 let gmapsPromise = null;
 function ensureGoogle() {
     if (gmapsPromise) return gmapsPromise;
@@ -19,7 +20,6 @@ function ensureGoogle() {
         version: 'weekly',
         libraries: ['geometry', 'marker']
     });
-
     gmapsPromise = loader.load();
     return gmapsPromise;
 }
@@ -43,8 +43,14 @@ const props = defineProps({
 });
 const emit = defineEmits(['update:visible', 'picked']);
 
+/* ===== IDs únicos accesibles ===== */
+const uid = Math.random().toString(36).slice(2);
+const justiId = `justi-${uid}`;
+const origenId = `origen-${uid}`;
+const categoriaId = `categoriaPeaje-${uid}`;
+const destinoId = `destino-${uid}`;
+
 /* ===== Estado ===== */
-const justiRef = ref(null);
 const state = reactive({
     justificacion: '',
     origen: null,
@@ -54,6 +60,7 @@ const state = reactive({
     polyline: null,
     categoriaPeaje: 'I'
 });
+const justiRef = ref(null);
 
 /* ===== Derivados ===== */
 const hasOverride = computed(() => !!props.originOverride && props.originOverride.lat != null && props.originOverride.lng != null);
@@ -94,31 +101,35 @@ function drawPolyline(path) {
     routePolyline.setMap(map);
 }
 
-function decodePolyline(str) {
+function decodePolyline(encoded) {
+    if (!encoded || typeof encoded !== 'string' || encoded.length < 5) return [];
     let index = 0,
         lat = 0,
         lng = 0,
         coords = [];
-    while (index < str.length) {
+
+    while (index < encoded.length) {
         let b,
             shift = 0,
             result = 0;
         do {
-            b = str.charCodeAt(index++) - 63;
+            b = encoded.charCodeAt(index++) - 63;
             result |= (b & 0x1f) << shift;
             shift += 5;
         } while (b >= 0x20);
         const dlat = result & 1 ? ~(result >> 1) : result >> 1;
         lat += dlat;
+
         shift = 0;
         result = 0;
         do {
-            b = str.charCodeAt(index++) - 63;
+            b = encoded.charCodeAt(index++) - 63;
             result |= (b & 0x1f) << shift;
             shift += 5;
         } while (b >= 0x20);
         const dlng = result & 1 ? ~(result >> 1) : result >> 1;
         lng += dlng;
+
         coords.push({ lat: lat / 1e5, lng: lng / 1e5 });
     }
     return coords;
@@ -191,37 +202,45 @@ function paintDestMarker() {
 async function computeRouteBackend() {
     const o = originLatLng.value;
     if (!o || state.destino.lat == null) return;
+
     try {
-        const { data } = await axios.post(
-            `${API_BASE}/compute-route`,
-            {
-                origin: { lat: o.lat, lng: o.lng },
-                dest: { lat: state.destino.lat, lng: state.destino.lng },
-                mode: 'DRIVE'
-            },
-            { timeout: 15000 }
-        );
+        const { data } = await axios.post(`${API_BASE}/compute-route`, {
+            origin: { lat: o.lat, lng: o.lng },
+            dest: { lat: state.destino.lat, lng: state.destino.lng },
+            mode: 'DRIVE'
+        });
 
-        state.distancia_m = Number(data?.distance_m ?? data?.distance ?? null);
-        state.duracion_s = Number(data?.duration_s ?? data?.duration ?? null);
-        state.polyline = data?.polyline ?? null;
+        const distance = Number(data?.distance_m ?? data?.distance ?? null);
+        const duration = Number(data?.duration_s ?? data?.duration ?? null);
+        const encoded = data?.polyline ?? null;
 
-        if (state.polyline) {
-            const path = decodePolyline(state.polyline);
-            drawPolyline(path);
-            if (path.length) {
+        // Limpieza previa
+        clearPolyline();
+
+        if (encoded && typeof encoded === 'string') {
+            const path = decodePolyline(encoded);
+            if (path.length > 1) {
+                drawPolyline(path);
                 const bounds = new google.maps.LatLngBounds();
                 path.forEach((p) => bounds.extend(p));
                 map.fitBounds(bounds);
+                state.polyline = encoded;
+                state.distancia_m = distance;
+                state.duracion_s = duration;
+                return;
             }
-        } else {
-            clearPolyline();
         }
-    } catch (err) {
-        console.warn('compute-route error:', err?.message || err);
+
+        console.warn('Ruta sin polyline o con datos insuficientes:', data);
+        state.polyline = null;
         state.distancia_m = null;
         state.duracion_s = null;
+        clearPolyline();
+    } catch (err) {
+        console.error('Error en computeRouteBackend:', err.response?.data || err.message);
         state.polyline = null;
+        state.distancia_m = null;
+        state.duracion_s = null;
         clearPolyline();
     }
 }
@@ -274,6 +293,32 @@ watch(
     }
 );
 
+watch(
+    () => state.origen,
+    async (newVal, oldVal) => {
+        if (!map || hasOverride.value) return;
+        const nuevaSede = props.sedes.find((s) => s.id === newVal);
+        if (nuevaSede && nuevaSede.lat != null && nuevaSede.lng != null) {
+            const newCenter = { lat: +nuevaSede.lat, lng: +nuevaSede.lng };
+            map.setCenter(newCenter);
+            map.setZoom(13);
+            if (originMarker) {
+                originMarker.setMap?.(null);
+                originMarker = null;
+            }
+            const AdvMarker = google.maps.marker?.AdvancedMarkerElement;
+            if (AdvMarker) {
+                originMarker = new AdvMarker({ position: newCenter, map, title: 'Origen' });
+            } else {
+                originMarker = new google.maps.Marker({ position: newCenter, map, label: 'O' });
+            }
+            if (state.destino.lat != null && state.destino.lng != null) {
+                await computeRouteBackend();
+            }
+        }
+    }
+);
+
 /* ===== Guardar ===== */
 async function save() {
     const o = originLatLng.value;
@@ -300,55 +345,48 @@ async function save() {
 </script>
 
 <template>
-    <Dialog :visible="visible" @update:visible="(v) => emit('update:visible', v)" header="Definir recorrido" :modal="true" :style="{ width: '48rem' }">
+    <Dialog :visible="visible" @update:visible="(v) => emit('update:visible', v)" header="Definir recorrido" :modal="true" appendTo="body" :style="{ width: '48rem' }">
         <div class="flex flex-col gap-4">
             <!-- === Justificación === -->
             <div class="flex flex-col gap-2">
-                <label for="justificacion" class="font-medium">Justificación del recorrido</label>
-                <Textarea id="justificacion" ref="justiRef" v-model.trim="state.justificacion" autoResize placeholder="¿Por qué se requiere este recorrido?" />
+                <label :for="justiId" class="font-medium">Justificación del recorrido</label>
+                <Textarea :id="justiId" name="justificacion" ref="justiRef" v-model.trim="state.justificacion" autoResize class="p-inputtextarea p-inputtext p-component w-full" placeholder="¿Por qué se requiere este recorrido?" />
             </div>
-
             <!-- === Origen === -->
             <div class="flex flex-col gap-2">
-                <label for="origen" class="font-medium">Origen</label>
-                <template v-if="hasOverride">
-                    <InputText id="origen" :value="originText" disabled />
-                    <small class="text-gray-500">El origen está bloqueado al último destino.</small>
-                </template>
-                <template v-else>
-                    <Select id="origen" v-model="state.origen" :options="sedes" optionLabel="label" optionValue="id" placeholder="Selecciona la sede" />
-                    <small class="text-gray-500">El origen se toma de la sede seleccionada.</small>
-                </template>
+                <span class="font-medium">Origen</span>
+                <Select v-model="state.origen" :options="sedes" optionLabel="label" optionValue="id" placeholder="Selecciona la sede" class="p-dropdown w-full" aria-label="Origen" />
+                <small class="text-gray-500"> El origen se toma de la sede seleccionada. </small>
             </div>
 
             <!-- === Categoría de vehículo === -->
             <div class="flex flex-col gap-2">
-                <label for="categoriaPeaje" class="font-medium">Categoría de vehículo</label>
-                <Select id="categoriaPeaje" v-model="state.categoriaPeaje" :options="CATEGORIAS" optionLabel="label" optionValue="id" />
-                <small class="text-gray-500">Se usará para calcular el valor total de peajes.</small>
+                <span class="font-medium">Categoría de vehículo</span>
+                <Select v-model="state.categoriaPeaje" :options="CATEGORIAS" optionLabel="label" optionValue="id" class="p-dropdown w-full" aria-label="Categoría de vehículo" />
+                <small class="text-gray-500"> Se usará para calcular el valor total de peajes. </small>
             </div>
 
             <!-- === Destino === -->
             <div class="flex flex-col gap-2">
-                <label for="destino" class="font-medium">Destino</label>
-                <InputText id="destino" :value="destinoDesc" disabled />
+                <label :for="destinoId" class="font-medium">Destino</label>
+                <InputText :id="destinoId" name="destino" :value="destinoDesc" disabled class="p-inputtext p-component w-full" />
                 <small class="text-gray-500">Haz clic en el mapa para fijar el destino.</small>
             </div>
 
-            <!-- === Información de distancia, duración === -->
-            <div v-if="state.distancia_m != null || state.duracion_s != null" class="text-sm text-gray-700" id="infoRuta">
-                <span v-if="state.distancia_m != null"><b>Distancia:</b> {{ (state.distancia_m / 1000).toFixed(2) }} km</span>
-                <span v-if="state.duracion_s != null" class="ml-3"><b>Duración:</b> {{ Math.round(state.duracion_s / 60) }} min</span>
+            <!-- === Info === -->
+            <div v-if="state.distancia_m != null || state.duracion_s != null" class="text-sm text-gray-700">
+                <span v-if="state.distancia_m != null"> <b>Distancia:</b> {{ (state.distancia_m / 1000).toFixed(2) }} km </span>
+                <span v-if="state.duracion_s != null" class="ml-3"> <b>Duración:</b> {{ Math.round(state.duracion_s / 60) }} min </span>
             </div>
 
             <!-- === Botones === -->
             <div class="flex items-center gap-2">
-                <Button label="Cancelar" icon="pi pi-times" text @click="$emit('update:visible', false)" :pt="{ root: { 'aria-label': 'Cancelar definición de recorrido' } }" />
-                <Button label="Guardar recorrido" icon="pi pi-check" :disabled="!canSave" @click="save" :pt="{ root: { 'aria-label': 'Guardar recorrido definido' } }" />
+                <Button label="Cancelar" icon="pi pi-times" text @click="$emit('update:visible', false)" />
+                <Button label="Guardar recorrido" icon="pi pi-check" :disabled="!canSave" @click="save" />
             </div>
 
             <!-- === Mapa === -->
-            <div class="rounded overflow-hidden border" id="mapaRecorrido">
+            <div class="rounded overflow-hidden border">
                 <div ref="mapEl" style="height: 360px; width: 100%"></div>
             </div>
         </div>
