@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import axios from 'axios';
+import { api } from '@/api';
 
 const API = 'http://127.0.0.1:8000/api/v1/catalogos';
 const toast = useToast();
@@ -51,10 +51,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API, {
-            params: buildParams({ force }),
-            signal
-        });
+        const { data } = await api.get('/catalogos', { params: buildParams({ force }), signal });
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -151,7 +148,7 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    const reqs = selected.value.map((r) => axios.get(`${API}/${r.id}`));
+    const reqs = selected.value.map((r) => api.get(`/catalogos/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -252,10 +249,10 @@ async function saveProduct() {
     }
     try {
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, product.value);
+            await api.patch(`/catalogos/${product.value.id}`, product.value);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, product.value);
+            await api.post('/catalogos', product.value);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
         productDialog.value = false;
@@ -284,7 +281,7 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API}/${current.value.id}`);
+        await api.delete(`/catalogos/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
         await refreshAfterDelete(1);
@@ -311,7 +308,7 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API}/bulk-delete`, { ids });
+        await api.post('/catalogos/bulk-delete', { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];

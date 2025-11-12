@@ -1,5 +1,8 @@
 <script setup>
 import FloatingConfigurator from '@/components/FloatingConfigurator.vue';
+import { useRouter } from 'vue-router';
+
+const router = useRouter();
 </script>
 
 <template>
@@ -8,15 +11,16 @@ import FloatingConfigurator from '@/components/FloatingConfigurator.vue';
         <div class="flex flex-col items-center justify-center">
             <div style="border-radius: 56px; padding: 0.3rem; background: linear-gradient(180deg, rgba(233, 30, 99, 0.4) 10%, rgba(33, 150, 243, 0) 30%)">
                 <div class="w-full bg-surface-0 dark:bg-surface-900 py-20 px-8 sm:px-20 flex flex-col items-center" style="border-radius: 53px">
-                    <div class="gap-4 flex flex-col items-center">
+                    <div class="gap-4 flex flex-col items-center max-w-[46rem]">
                         <div class="flex justify-center items-center border-2 border-pink-500 rounded-full" style="height: 3.2rem; width: 3.2rem">
                             <i class="pi pi-fw pi-exclamation-circle !text-2xl text-pink-500"></i>
                         </div>
-                        <h1 class="text-surface-900 dark:text-surface-0 font-bold text-5xl mb-2">Error Occured</h1>
-                        <span class="text-muted-color mb-8">Requested resource is not available.</span>
+                        <h1 class="text-surface-900 dark:text-surface-0 font-bold text-5xl mb-2">Ocurrió un error</h1>
+                        <span class="text-muted-color mb-8 text-center">El recurso solicitado no está disponible o se produjo un problema inesperado.</span>
                         <img src="/demo/images/error/asset-error.svg" alt="Error" class="mb-8" width="80%" />
-                        <div class="col-span-12 mt-8 text-center">
-                            <Button as="router-link" label="Go to Dashboard" to="/" severity="danger" />
+                        <div class="col-span-12 mt-2 text-center flex gap-3">
+                            <Button label="Ir al inicio" severity="danger" @click="router.push('/')" />
+                            <Button label="Volver" outlined @click="router.back()" />
                         </div>
                     </div>
                 </div>

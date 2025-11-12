@@ -1,7 +1,23 @@
 <script setup>
 import axios from 'axios';
+const HTTP_BASE = 'http://127.0.0.1:8000';
+
+const http = axios.create({
+    baseURL: HTTP_BASE,
+    withCredentials: true,
+    xsrfCookieName: 'XSRF-TOKEN',
+    xsrfHeaderName: 'X-XSRF-TOKEN'
+});
+
+let sanctumReady = false;
+async function bootSanctum() {
+    if (sanctumReady) return;
+    await http.get('/sanctum/csrf-cookie');
+    sanctumReady = true;
+}
+
 import { useToast } from 'primevue/usetoast';
-import { computed, onMounted, reactive, ref, watch } from 'vue'; // <- añadí watch
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 const API = 'http://127.0.0.1:8000/api/v1/fechas';
 const toast = useToast();
@@ -33,9 +49,8 @@ const allSelected = computed(() => selected.value.length > 0 && selected.value.l
 const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
 
 // Toggle del header checkbox
-function toggleAll(e) {
-    if (e.checked) selected.value = [...products.value];
-    else selected.value = [];
+function toggleAll(checked) {
+    selected.value = checked ? [...products.value] : [];
 }
 
 /* ===== Orden ===== */
@@ -58,10 +73,8 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API, {
-            params: buildParams({ force }),
-            signal
-        });
+        await bootSanctum();
+        const { data } = await http.get('/api/v1/fechas', { params: buildParams({ force }), signal });
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -151,7 +164,7 @@ function clearSearch() {
         activeCtrl.abort();
         activeCtrl = null;
     }
-    getProducts(); // sin q -> listado completo
+    getProducts();
 }
 
 /* ===== Detalles ===== */
@@ -163,7 +176,8 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    const reqs = selected.value.map((r) => axios.get(`${API}/${r.id}`));
+    await bootSanctum();
+    const reqs = selected.value.map((r) => http.get(`/api/v1/fechas/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -315,6 +329,25 @@ function openNew() {
     resetValidation();
     productDialog.value = true;
 }
+
+function toLocalDate(v) {
+    if (!v) return null;
+    if (v instanceof Date && !isNaN(v.getTime())) return v;
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        const d = new Date(`${v}T00:00:00`);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof v === 'string') {
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof v === 'number') {
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+}
+
 function editProduct(row) {
     product.value = { ...row };
     // convierte strings ISO del API a Date
@@ -370,10 +403,12 @@ async function saveProduct() {
         const payload = buildPayload();
 
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, payload, { headers: { 'Content-Type': 'application/json' } });
+            await bootSanctum();
+            await http.patch(`/api/v1/fechas/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, payload, { headers: { 'Content-Type': 'application/json' } });
+            await bootSanctum();
+            await http.post('/api/v1/fechas', payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
 
@@ -400,7 +435,8 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API}/${current.value.id}`);
+        await bootSanctum();
+        await http.delete(`/api/v1/fechas/${current.value.id}`);
 
         // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
@@ -432,7 +468,8 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API}/bulk-delete`, { ids });
+        await bootSanctum();
+        await http.post('/api/v1/fechas/bulk-delete', { ids });
 
         // Limpieza optimista
         const set = new Set(ids);
@@ -516,6 +553,7 @@ onMounted(() => getProducts());
             @page="onPage"
             @sort="onSort"
             :rowsPerPageOptions="[5, 10, 25, 50]"
+            :showCurrentPageReport="true"
             currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
             emptyMessage="No hay registros"
             :pt="{
@@ -539,7 +577,7 @@ onMounted(() => getProducts());
                         :binary="true"
                         :modelValue="allSelected"
                         :indeterminate="someSelected && !allSelected"
-                        @change="toggleAll"
+                        @update:modelValue="toggleAll"
                     />
                 </template>
 
@@ -629,7 +667,7 @@ onMounted(() => getProducts());
         <!-- Confirmación de borrado -->
         <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
             <div>
-                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.anio }}</b
+                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.periodo }}</b
                 >?
             </div>
             <template #footer>

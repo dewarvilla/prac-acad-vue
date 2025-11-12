@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import axios from 'axios';
+import { api } from '@/api';
 
 const API = 'http://127.0.0.1:8000/api/v1/creaciones';
 const API_CAT = 'http://127.0.0.1:8000/api/v1/catalogos';
