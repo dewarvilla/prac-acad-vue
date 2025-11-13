@@ -1,22 +1,20 @@
 import { Loader } from '@googlemaps/js-api-loader';
 
-let gmapsPromise = null;
-function ensureGoogle() {
-    if (gmapsPromise) return gmapsPromise;
+let loaderInstance = null;
+let loadPromise = null;
 
-    const key = import.meta.env.VITE_GMAPS_KEY;
-    if (!key) {
-        console.error('Falta VITE_GMAPS_KEY en .env.local');
-        gmapsPromise = Promise.resolve(null);
-        return gmapsPromise;
+export function getGoogleMaps() {
+    if (window.google?.maps) return Promise.resolve(window.google.maps);
+
+    if (!loaderInstance) {
+        const key = import.meta.env.VITE_GMAPS_KEY;
+        loaderInstance = new Loader({
+            apiKey: key,
+            version: 'weekly',
+            libraries: ['geometry', 'marker']
+        });
     }
 
-    const loader = new Loader({
-        apiKey: key,
-        version: 'weekly',
-        libraries: ['places']
-    });
-
-    gmapsPromise = loader.load();
-    return gmapsPromise;
+    if (!loadPromise) loadPromise = loaderInstance.load();
+    return loadPromise.then(() => window.google.maps);
 }

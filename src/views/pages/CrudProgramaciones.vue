@@ -1,21 +1,21 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import axios from 'axios';
+import { api, ensureCsrf } from '@/api';
 import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
 import RouteMiniMap from '@/components/RouteMiniMap.vue';
 
-const routeEstimates = reactive({}); // { [key]: { loading?, error?, distance_m?, duration_s? } }
+const routeEstimates = reactive({});
 const tableUid = `prog-${Math.random().toString(36).slice(2)}`;
 const uid = Math.random().toString(36).slice(2);
 const recId = `recursos-${uid}`;
 const jusId = `justificacion-${uid}`;
 const numEstId = `num-est-${uid}`;
 
-/* ========= API ========= */
-const API_BASE = 'http://127.0.0.1:8000/api/v1';
-const API_PROG = `${API_BASE}/programaciones`;
-const API_CRE = `${API_BASE}/creaciones`;
+/* ========= API (relativas al baseURL de api) ========= */
+const API_PROG = '/programaciones';
+const API_CRE = '/creaciones';
+const API_RUTAS = '/rutas';
 
 const toast = useToast();
 
@@ -61,7 +61,8 @@ async function fetchEstimateForRoute(r, key) {
     routeEstimates[key].loading = true;
     routeEstimates[key].error = null;
     try {
-        const { data } = await axios.post(`${API_BASE}/compute-route`, { origin: { lat: oLat, lng: oLng }, dest: { lat: dLat, lng: dLng }, mode: 'DRIVE' }, { timeout: 15000 });
+        await ensureCsrf();
+        const { data } = await api.post('/compute-route', { origin: { lat: oLat, lng: oLng }, dest: { lat: dLat, lng: dLng }, mode: 'DRIVE' }, { timeout: 15000 });
         routeEstimates[key].distance_m = Number(data?.distance_m ?? data?.distance ?? 0) || null;
         routeEstimates[key].duration_s = Number(data?.duration_s ?? data?.duration ?? 0) || null;
     } catch (e) {
@@ -112,7 +113,7 @@ async function getProducts(opts = {}) {
     loading.value = true;
 
     try {
-        const { data } = await axios.get(API_PROG, { params: buildParams({ force }), signal });
+        const { data } = await api.get(API_PROG, { params: buildParams({ force }), signal });
 
         if (Array.isArray(data)) {
             products.value = data;
@@ -174,6 +175,8 @@ watch(search, () => {
         scheduleFetch();
     }
 });
+
+/* ===== Autocomplete de creaciones ===== */
 const creQuery = ref(''); // texto visible
 const creSugs = ref([]); // sugerencias del endpoint
 const loadingCre = ref(false);
@@ -191,7 +194,6 @@ function closeCrePanel() {
     hiCre.value = -1;
 }
 
-// Normalizador
 const norm = (v) => (v ?? '') + '';
 
 async function fetchCreaciones(q = '') {
@@ -199,7 +201,7 @@ async function fetchCreaciones(q = '') {
     try {
         const params = { per_page: 20, page: 1 };
         if (q.trim()) params.q = q.trim();
-        const { data } = await axios.get(API_CRE, { params });
+        const { data } = await api.get(API_CRE, { params });
         const items = Array.isArray(data) ? data : (data.data ?? []);
         creSugs.value = items.map((c) => ({
             id: c.id,
@@ -310,21 +312,24 @@ async function openDetails() {
     Object.keys(routeEstimates).forEach((k) => delete routeEstimates[k]);
 
     try {
-        const progReqs = ids.map((id) => axios.get(`${API_PROG}/${id}`));
+        const progReqs = ids.map((id) => api.get(`${API_PROG}/${id}`));
         const progResults = await Promise.allSettled(progReqs);
 
         const progs = progResults
             .filter((r) => r.status === 'fulfilled')
             .map((r) => r.value.data?.data ?? r.value.data)
             .filter(Boolean);
-        const routeReqs = progs.map((p) => axios.get(`${API_BASE}/rutas`, { params: { programacion_id: p.id, page: 1, per_page: 200 } }));
+
+        const routeReqs = progs.map((p) => api.get(API_RUTAS, { params: { programacion_id: p.id, page: 1, per_page: 200 } }));
         const routeResults = await Promise.allSettled(routeReqs);
+
         for (const [i, p] of progs.entries()) {
-            p.routes = routeResults[i].status === 'fulfilled' ? ((Array.isArray(routeResults[i].value.data) ? routeResults[i].value.data : routeResults[i].value.data?.data) ?? []) : [];
+            const rData = routeResults[i];
+            p.routes = rData.status === 'fulfilled' ? ((Array.isArray(rData.value.data) ? rData.value.data : rData.value.data?.data) ?? []) : [];
 
             for (const r of p.routes) {
                 try {
-                    const { data } = await axios.get(`${API_BASE}/rutas/${r.id}`);
+                    const { data } = await api.get(`${API_RUTAS}/${r.id}`);
                     Object.assign(r, data?.data ?? data);
                 } catch {
                     console.warn(`No se pudo actualizar la ruta ${r.id}`);
@@ -411,37 +416,7 @@ function lastDestFromList(list) {
     return { lat: r.destino_lat, lng: r.destino_lng, desc: r.destino_desc || '', placeId: r.destino_place_id || null };
 }
 function finalizeRoutesForCreate(progId, currentToCreate) {
-    /* const list = visibleRoutes(); // keep + new (sin delete)
-    if (!list.length) return currentToCreate;
-
-    const firstO = firstOriginFromList(list);
-    const lastD = lastDestFromList(list);
-    if (!firstO || !lastD) return currentToCreate;
-
-    const yaVuelve = coordsEqual({ lat: lastD.lat, lng: lastD.lng }, { lat: firstO.lat, lng: firstO.lng });
-    if (yaVuelve) return currentToCreate;
-
-    const extended = currentToCreate ? [...currentToCreate] : [];
-    extended.push({
-        programacion_id: progId,
-        // origen = último destino
-        origen_place_id: lastD.placeId || null,
-        origen_desc: lastD.desc || '',
-        origen_lat: Number(lastD.lat),
-        origen_lng: Number(lastD.lng),
-        // destino = primer origen
-        destino_place_id: firstO.placeId || null,
-        destino_desc: firstO.desc || '',
-        destino_lat: Number(firstO.lat),
-        destino_lng: Number(firstO.lng),
-        distancia_m: null,
-        duracion_s: null,
-        polyline: null,
-        justificacion: 'Regreso al origen de la práctica',
-        _state: 'new'
-    });
-
-    return extended; */
+    // De momento no auto-creamos ruta de regreso
     return currentToCreate;
 }
 
@@ -576,9 +551,8 @@ async function editProduct(row) {
     resetValidation();
     routesDraft.value = [];
 
-    // Rutas existentes (keep)
     try {
-        const { data } = await axios.get(`${API_BASE}/rutas`, { params: { programacion_id: row.id, page: 1, per_page: 200 } });
+        const { data } = await api.get(API_RUTAS, { params: { programacion_id: row.id, page: 1, per_page: 200 } });
         const items = data?.data ?? data ?? [];
         routesDraft.value = items.map((it) => ({
             id: it.id,
@@ -633,9 +607,11 @@ async function saveProduct() {
 
     try {
         saving.value = true;
+        await ensureCsrf();
 
         if (product.value.id) {
-            await axios.patch(`${API_PROG}/${product.value.id}`, payload);
+            // === ACTUALIZAR ===
+            await api.patch(`${API_PROG}/${product.value.id}`, payload);
             const progId = product.value.id;
             let toCreate = routesDraft.value.filter((r) => r._state === 'new');
             toCreate = finalizeRoutesForCreate(progId, toCreate);
@@ -647,11 +623,11 @@ async function saveProduct() {
                 delete p._state;
                 delete p.id;
                 reqs.push(
-                    axios.post(`${API_BASE}/rutas`, p).then(async (res) => {
+                    api.post(API_RUTAS, p).then(async (res) => {
                         const rutaId = res.data?.data?.id ?? res.data?.id;
                         if (rutaId) {
                             try {
-                                await axios.post(`${API_BASE}/rutas/${rutaId}/peajes/sync`, {
+                                await api.post(`${API_RUTAS}/${rutaId}/peajes/sync`, {
                                     categoria: r.categoria_peaje || 'I'
                                 });
                             } catch {
@@ -661,9 +637,9 @@ async function saveProduct() {
                     })
                 );
             }
-            // --- eliminar rutas marcadas ---
+            // eliminar rutas marcadas
             for (const r of toDelete) {
-                reqs.push(axios.delete(`${API_BASE}/rutas/${r.id}`));
+                reqs.push(api.delete(`${API_RUTAS}/${r.id}`));
             }
 
             if (reqs.length) await Promise.allSettled(reqs);
@@ -671,7 +647,7 @@ async function saveProduct() {
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
             // === CREAR NUEVO ===
-            const { data } = await axios.post(API_PROG, payload);
+            const { data } = await api.post(API_PROG, payload);
             const created = data?.data ?? data ?? {};
             const progId = created.id;
 
@@ -685,11 +661,11 @@ async function saveProduct() {
                     delete p._state;
                     delete p.id;
                     reqs.push(
-                        axios.post(`${API_BASE}/rutas`, p).then(async (res) => {
+                        api.post(API_RUTAS, p).then(async (res) => {
                             const rutaId = res.data?.data?.id ?? res.data?.id;
                             if (rutaId) {
                                 try {
-                                    await axios.post(`${API_BASE}/rutas/${rutaId}/peajes/sync`, {
+                                    await api.post(`${API_RUTAS}/${rutaId}/peajes/sync`, {
                                         categoria: r.categoria_peaje || 'I'
                                     });
                                 } catch {
@@ -739,7 +715,8 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API_PROG}/${current.value.id}`);
+        await ensureCsrf();
+        await api.delete(`${API_PROG}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
         await refreshAfterDelete(1);
@@ -760,7 +737,8 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API_PROG}/bulk-delete`, { ids });
+        await ensureCsrf();
+        await api.post(`${API_PROG}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
@@ -784,7 +762,9 @@ function refreshAfterDelete(deletedCount = 1) {
     total.value = Math.max(0, Number(total.value) - Number(deletedCount));
     const r = Number(rows.value) || 10;
     const totalPages = Math.max(1, Math.ceil(total.value / r));
-    if (Number(page.value) > totalPages) page.value = totalPages;
+    if (Number(page.value) > totalPages) {
+        page.value = totalPages;
+    }
     return getProducts({ force: true });
 }
 

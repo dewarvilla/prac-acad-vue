@@ -1,6 +1,6 @@
 <script setup>
-import { Loader } from '@googlemaps/js-api-loader';
 import { ref, watch, onMounted } from 'vue';
+import { getGoogleMaps } from '@/lib/googleMaps';
 
 const props = defineProps({
     ruta: { type: Object, required: true }
@@ -11,18 +11,7 @@ let map = null;
 let polyline = null;
 
 async function ensureGoogle() {
-    if (window.google?.maps) return;
-    const key = import.meta.env.VITE_GMAPS_KEY;
-    if (!key) {
-        console.error('❌ Falta VITE_GMAPS_KEY');
-        return;
-    }
-    const loader = new Loader({
-        apiKey: key,
-        version: 'weekly',
-        libraries: ['geometry', 'marker']
-    });
-    await loader.load();
+    await getGoogleMaps();
 }
 
 async function initMap() {
@@ -30,7 +19,6 @@ async function initMap() {
 
     if (!window.google?.maps || !props.ruta) return;
 
-    // 🔹 limpia el contenedor si ya hay mapa
     if (map) {
         map = null;
         mapEl.value.innerHTML = '';

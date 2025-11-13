@@ -1,9 +1,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import axios from 'axios';
+import { api, ensureCsrf } from '@/api';
 
-const API = 'http://127.0.0.1:8000/api/v1/salarios';
+const API = '/salarios';
 const toast = useToast();
 
 /* ===== Tabla (server-side) ===== */
@@ -16,7 +16,7 @@ const rows = ref(10);
 const total = ref(0);
 
 const sortField = ref('anio');
-const sortOrder = ref(1); // 1 asc, -1 desc
+const sortOrder = ref(1);
 
 /* ===== Búsqueda única (en tiempo real) ===== */
 const search = ref('');
@@ -58,7 +58,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API, {
+        const { data } = await api.get(API, {
             params: buildParams({ force }),
             signal
         });
@@ -76,7 +76,7 @@ async function getProducts(opts = {}) {
         if (!canceled) {
             const status = e?.response?.status;
             const msg = e?.response?.data?.message || e.message;
-            toast.add({ severity: 'error', summary: 'Error al cargar', detail: `[${status}] ${msg}`, life: 6000 });
+            toast.add({ severity: 'error', summary: 'Error al cargar', detail: `[${status ?? 'ERR'}] ${msg}`, life: 6000 });
             products.value = [];
             total.value = 0;
         }
@@ -88,7 +88,6 @@ async function getProducts(opts = {}) {
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
 
-    // evita llamadas innecesarias
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
     if (typingTimer) {
@@ -114,7 +113,7 @@ watch(search, () => {
             activeCtrl = null;
         }
         if (typingTimer) clearTimeout(typingTimer);
-        getProducts(); // listado completo sin q
+        getProducts();
     } else if (raw.length >= MIN_CHARS) {
         scheduleFetch();
     }
@@ -152,7 +151,7 @@ function clearSearch() {
         activeCtrl.abort();
         activeCtrl = null;
     }
-    getProducts(); // sin q -> listado completo
+    getProducts();
 }
 
 /* ===== Detalles ===== */
@@ -164,7 +163,7 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    const reqs = selected.value.map((r) => axios.get(`${API}/${r.id}`));
+    const reqs = selected.value.map((r) => api.get(`${API}/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -260,11 +259,13 @@ async function saveProduct() {
         return;
     }
     try {
+        await ensureCsrf();
+
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, product.value);
+            await api.patch(`${API}/${product.value.id}`, product.value);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, product.value);
+            await api.post(API, product.value);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
         productDialog.value = false;
@@ -272,8 +273,10 @@ async function saveProduct() {
     } catch (e) {
         if (e?.response?.status === 422 && e.response.data?.errors) {
             Object.entries(e.response.data.errors).forEach(([f, msgs]) => {
-                errors[f] = Array.isArray(msgs) ? msgs[0] : String(msgs);
-                touched[f] = true;
+                if (f in errors) {
+                    errors[f] = Array.isArray(msgs) ? msgs[0] : String(msgs);
+                    touched[f] = true;
+                }
             });
         }
         const detail = e?.response?.data?.message || e?.response?.data?.error || e.message;
@@ -293,14 +296,10 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API}/${current.value.id}`);
-
-        // Limpieza optimista
+        await ensureCsrf();
+        await api.delete(`${API}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
-
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
-
-        // 🔁 Refill de la página
         await refreshAfterDelete(1);
     } catch (e) {
         toast.add({
@@ -314,6 +313,7 @@ async function deleteProduct() {
         current.value = null;
     }
 }
+
 // ===== Borrado en lote =====
 const bulkDeleteDialog = ref(false);
 
@@ -325,16 +325,12 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API}/bulk-delete`, { ids });
-
-        // Limpieza optimista
+        await ensureCsrf();
+        await api.post(`${API}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
-
         toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
-
-        // 🔁 Refill de la página
         await refreshAfterDelete(ids.length);
     } catch (e) {
         const status = e?.response?.status;
@@ -351,18 +347,12 @@ async function bulkDelete() {
 }
 
 function refreshAfterDelete(deletedCount = 1) {
-    // 1) Actualiza el total local
     total.value = Math.max(0, Number(total.value) - Number(deletedCount));
-
-    // 2) Recalcula total de páginas y corrige si la actual quedó fuera de rango
     const r = Number(rows.value) || 10;
     const totalPages = Math.max(1, Math.ceil(total.value / r));
     if (Number(page.value) > totalPages) {
         page.value = totalPages;
     }
-
-    // 3) Recarga la página actual para “rellenar” hasta r filas
-    //    (si hay más ítems disponibles)
     return getProducts({ force: true });
 }
 
@@ -377,8 +367,7 @@ const toNumber = (v) => (typeof v === 'number' ? v : Number(String(v ?? '').repl
 
 const formatMoney = (v) => {
     const n = toNumber(v);
-    if (!Number.isFinite(n)) return ''; // o devuelve `$ ${v}` si prefieres
-    // Cambia 'es-CO'/'COP' si quieres otro formato
+    if (!Number.isFinite(n)) return '';
     return new Intl.NumberFormat('es-CO', {
         style: 'currency',
         currency: 'COP',

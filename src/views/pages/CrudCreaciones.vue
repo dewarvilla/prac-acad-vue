@@ -1,10 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import { api } from '@/api';
-
-const API = 'http://127.0.0.1:8000/api/v1/creaciones';
-const API_CAT = 'http://127.0.0.1:8000/api/v1/catalogos';
+import { api, ensureCsrf } from '@/api';
 
 const toast = useToast();
 
@@ -59,7 +56,7 @@ function closeProgPanel() {
 async function fetchProgramas(query = '') {
     loadingProgs.value = true;
     try {
-        const { data } = await axios.get(API_CAT, {
+        const { data } = await api.get('/catalogos', {
             params: { q: query, per_page: 20, page: 1 }
         });
         const items = Array.isArray(data) ? data : (data.data ?? []);
@@ -169,7 +166,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        const { data } = await axios.get(API, { params: buildParams({ force }), signal });
+        const { data } = await api.get('/creaciones', { params: buildParams({ force }), signal });
 
         if (Array.isArray(data)) {
             products.value = data;
@@ -269,7 +266,7 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    const reqs = selected.value.map((r) => axios.get(`${API}/${r.id}`));
+    const reqs = selected.value.map((r) => api.get(`/creaciones/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -341,6 +338,7 @@ function openNew() {
         recursosNecesarios: '',
         justificacion: ''
     };
+    programaQuery.value = '';
     resetValidation();
     productDialog.value = true;
 }
@@ -382,20 +380,23 @@ async function saveProduct() {
 
     try {
         saving.value = true;
+        await ensureCsrf();
+
         if (product.value.id) {
-            await axios.patch(`${API}/${product.value.id}`, payload);
+            await api.patch(`/creaciones/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await axios.post(API, payload);
+            await api.post('/creaciones', payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
         productDialog.value = false;
         await getProducts({ force: true });
     } catch (e) {
+        const detail = e?.response?.data?.message || e?.response?.data?.error || e.message;
         toast.add({
             severity: 'error',
             summary: 'No se pudo guardar',
-            detail: e?.message,
+            detail,
             life: 5000
         });
     } finally {
@@ -413,7 +414,8 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await axios.delete(`${API}/${current.value.id}`);
+        await ensureCsrf();
+        await api.delete(`/creaciones/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
         await getProducts({ force: true });
@@ -440,7 +442,8 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await axios.post(`${API}/bulk-delete`, { ids });
+        await ensureCsrf();
+        await api.post('/creaciones/bulk-delete', { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];

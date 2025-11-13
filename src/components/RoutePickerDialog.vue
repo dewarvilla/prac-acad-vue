@@ -1,28 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick } from 'vue';
-import { Loader } from '@googlemaps/js-api-loader';
-import axios from 'axios';
-
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api/v1';
-
-/* ===== Google Loader ===== */
-let gmapsPromise = null;
-function ensureGoogle() {
-    if (gmapsPromise) return gmapsPromise;
-    const key = import.meta.env.VITE_GMAPS_KEY;
-    if (!key) {
-        console.error('Falta VITE_GMAPS_KEY en .env.local');
-        gmapsPromise = Promise.resolve(null);
-        return gmapsPromise;
-    }
-    const loader = new Loader({
-        apiKey: key,
-        version: 'weekly',
-        libraries: ['geometry', 'marker']
-    });
-    gmapsPromise = loader.load();
-    return gmapsPromise;
-}
+import { getGoogleMaps } from '@/lib/googleMaps';
+import { api, ensureCsrf } from '@/api';
 
 /* ===== Categorías de vehículo ===== */
 const CATEGORIAS = [
@@ -136,7 +115,7 @@ function decodePolyline(encoded) {
 }
 
 async function initMap() {
-    await ensureGoogle();
+    await getGoogleMaps();
     if (!window.google?.maps || !mapEl.value) return;
 
     const center = originLatLng.value ? { lat: originLatLng.value.lat, lng: originLatLng.value.lng } : { lat: 8.75, lng: -75.88 };
@@ -204,7 +183,9 @@ async function computeRouteBackend() {
     if (!o || state.destino.lat == null) return;
 
     try {
-        const { data } = await axios.post(`${API_BASE}/compute-route`, {
+        await ensureCsrf();
+
+        const { data } = await api.post('/compute-route', {
             origin: { lat: o.lat, lng: o.lng },
             dest: { lat: state.destino.lat, lng: state.destino.lng },
             mode: 'DRIVE'
@@ -214,7 +195,6 @@ async function computeRouteBackend() {
         const duration = Number(data?.duration_s ?? data?.duration ?? null);
         const encoded = data?.polyline ?? null;
 
-        // Limpieza previa
         clearPolyline();
 
         if (encoded && typeof encoded === 'string') {
@@ -224,6 +204,7 @@ async function computeRouteBackend() {
                 const bounds = new google.maps.LatLngBounds();
                 path.forEach((p) => bounds.extend(p));
                 map.fitBounds(bounds);
+
                 state.polyline = encoded;
                 state.distancia_m = distance;
                 state.duracion_s = duration;

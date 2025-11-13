@@ -1,25 +1,9 @@
 <script setup>
-import axios from 'axios';
-const HTTP_BASE = 'http://127.0.0.1:8000';
-
-const http = axios.create({
-    baseURL: HTTP_BASE,
-    withCredentials: true,
-    xsrfCookieName: 'XSRF-TOKEN',
-    xsrfHeaderName: 'X-XSRF-TOKEN'
-});
-
-let sanctumReady = false;
-async function bootSanctum() {
-    if (sanctumReady) return;
-    await http.get('/sanctum/csrf-cookie');
-    sanctumReady = true;
-}
-
+import { api, ensureCsrf } from '@/api';
 import { useToast } from 'primevue/usetoast';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
-const API = 'http://127.0.0.1:8000/api/v1/fechas';
+const API = '/fechas';
 const toast = useToast();
 
 /* ===== Tabla (server-side) ===== */
@@ -32,7 +16,7 @@ const rows = ref(10);
 const total = ref(0);
 
 const sortField = ref('periodo');
-const sortOrder = ref(1); // 1 asc, -1 desc
+const sortOrder = ref(1);
 
 /* ===== Búsqueda única ===== */
 const search = ref('');
@@ -73,8 +57,7 @@ async function getProducts(opts = {}) {
     const { signal, force = false } = opts;
     loading.value = true;
     try {
-        await bootSanctum();
-        const { data } = await http.get('/api/v1/fechas', { params: buildParams({ force }), signal });
+        const { data } = await api.get(API, { params: buildParams({ force }), signal });
         if (Array.isArray(data)) {
             products.value = data;
             total.value = data.length;
@@ -101,7 +84,6 @@ async function getProducts(opts = {}) {
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
 
-    // evita llamadas innecesarias
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
 
     if (typingTimer) {
@@ -127,7 +109,7 @@ watch(search, () => {
             activeCtrl = null;
         }
         if (typingTimer) clearTimeout(typingTimer);
-        getProducts(); // listado completo sin q
+        getProducts();
     } else if (raw.length >= MIN_CHARS) {
         scheduleFetch();
     }
@@ -176,8 +158,7 @@ async function openDetails() {
     if (!selected.value.length) return;
     detailsLoading.value = true;
     details.value = [];
-    await bootSanctum();
-    const reqs = selected.value.map((r) => http.get(`/api/v1/fechas/${r.id}`));
+    const reqs = selected.value.map((r) => api.get(`${API}/${r.id}`));
     const results = await Promise.allSettled(reqs);
     details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
     const fails = results.length - details.value.length;
@@ -238,7 +219,7 @@ const req = (v) => !isEmpty(v) || 'Requerido.';
 const isDateLike = (v) => {
     if (v instanceof Date) return !isNaN(v.getTime());
     if (typeof v === 'string') {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false; // YYYY-MM-DD
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
         const d = new Date(`${v}T00:00:00`);
         return !isNaN(d.getTime());
     }
@@ -252,13 +233,11 @@ const gte = (a, b) => !isDateLike(a) || !isDateLike(b) || toTime(a) >= toTime(b)
 
 const rules = {
     periodo: [req, (v) => /^\d{4}-(1|2)$/.test(String(v)) || 'Formato: AAAA-1 o AAAA-2'],
-
     // Pregrado
     fechaAperturaPreg: [req, date],
     fechaCierreDocentePreg: [req, date, (v) => gte(v, product.value.fechaAperturaPreg) || 'Debe ser ≥ apertura pregrado'],
     fechaCierreJefeDepart: [req, date, (v) => gte(v, product.value.fechaCierreDocentePreg) || 'Debe ser ≥ cierre docente pregrado'],
     fechaCierreDecano: [req, date, (v) => gte(v, product.value.fechaCierreJefeDepart) || 'Debe ser ≥ cierre jefe depart.'],
-
     // Postgrado
     fechaAperturaPostg: [req, date],
     fechaCierreDocentePostg: [req, date, (v) => gte(v, product.value.fechaAperturaPostg) || 'Debe ser ≥ apertura postgrado'],
@@ -297,17 +276,15 @@ function resetValidation() {
     Object.keys(touched).forEach((k) => (touched[k] = false));
 }
 
-// campos de fecha en tu formulario
 const DATE_FIELDS = ['fechaAperturaPreg', 'fechaCierreDocentePreg', 'fechaCierreJefeDepart', 'fechaCierreDecano', 'fechaAperturaPostg', 'fechaCierreDocentePostg', 'fechaCierreCoordinadorPostg', 'fechaCierreJefePostg'];
 
 function ymd(v) {
     if (!v) return '';
     const d = v instanceof Date ? v : new Date(v);
     if (isNaN(d.getTime())) return '';
-    const useUTC = typeof v === 'string' && /Z$/i.test(v);
-    const day = useUTC ? d.getUTCDate() : d.getDate();
-    const month = useUTC ? d.getUTCMonth() + 1 : d.getMonth() + 1;
-    const year = useUTC ? d.getUTCFullYear() : d.getFullYear();
+    const day = d.getDate();
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
     const dd = String(day).padStart(2, '0');
     const mm = String(month).padStart(2, '0');
     return `${year}-${mm}-${dd}`;
@@ -350,38 +327,33 @@ function toLocalDate(v) {
 
 function editProduct(row) {
     product.value = { ...row };
-    // convierte strings ISO del API a Date
     DATE_FIELDS.forEach((f) => (product.value[f] = toLocalDate(row[f])));
     resetValidation();
     productDialog.value = true;
 }
 
-/* ===== Helpers para payload y errores (camelCase -> snake_case) ===== */
+/* ===== Helpers camelCase <-> snake_case ===== */
 const FIELD_MAP = {
     periodo: 'periodo',
-    // Pregrado
     fechaAperturaPreg: 'fecha_apertura_preg',
     fechaCierreDocentePreg: 'fecha_cierre_docente_preg',
     fechaCierreJefeDepart: 'fecha_cierre_jefe_depart',
     fechaCierreDecano: 'fecha_cierre_decano',
-    // Postgrado
     fechaAperturaPostg: 'fecha_apertura_postg',
     fechaCierreDocentePostg: 'fecha_cierre_docente_postg',
     fechaCierreCoordinadorPostg: 'fecha_cierre_coordinador_postg',
     fechaCierreJefePostg: 'fecha_cierre_jefe_postg'
 };
 
-// Normaliza Date -> 'YYYY-MM-DD' y arma el payload en snake_case
 function buildPayload() {
     const out = {};
     for (const [camel, snake] of Object.entries(FIELD_MAP)) {
         const v = product.value[camel];
-        out[snake] = camel !== 'periodo' ? ymd(v) : v;
+        out[snake] = camel === 'periodo' ? v : ymd(v);
     }
     return out;
 }
 
-// Traduce errores del backend (snake) -> claves camel para mostrarlos en el form
 function applyServerErrors(errs = {}) {
     const snakeToCamel = Object.fromEntries(Object.entries(FIELD_MAP).map(([camel, snake]) => [snake, camel]));
     for (const [snake, msgs] of Object.entries(errs)) {
@@ -401,14 +373,13 @@ async function saveProduct() {
     }
     try {
         const payload = buildPayload();
+        await ensureCsrf();
 
         if (product.value.id) {
-            await bootSanctum();
-            await http.patch(`/api/v1/fechas/${product.value.id}`, payload);
+            await api.patch(`${API}/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await bootSanctum();
-            await http.post('/api/v1/fechas', payload);
+            await api.post(API, payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
 
@@ -435,15 +406,13 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await bootSanctum();
-        await http.delete(`/api/v1/fechas/${current.value.id}`);
+        await ensureCsrf();
+        await api.delete(`${API}/${current.value.id}`);
 
-        // Limpieza optimista
         products.value = products.value.filter((x) => x.id !== current.value.id);
 
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
 
-        // 🔁 Refill de la página
         await refreshAfterDelete(1);
     } catch (e) {
         toast.add({
@@ -457,6 +426,7 @@ async function deleteProduct() {
         current.value = null;
     }
 }
+
 // ===== Borrado en lote =====
 const bulkDeleteDialog = ref(false);
 
@@ -468,17 +438,15 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await bootSanctum();
-        await http.post('/api/v1/fechas/bulk-delete', { ids });
+        await ensureCsrf();
+        await api.post(`${API}/bulk-delete`, { ids });
 
-        // Limpieza optimista
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
 
         toast.add({ severity: 'success', summary: `Eliminados (${ids.length})`, life: 2500 });
 
-        // 🔁 Refill de la página
         await refreshAfterDelete(ids.length);
     } catch (e) {
         const status = e?.response?.status;
@@ -495,18 +463,14 @@ async function bulkDelete() {
 }
 
 function refreshAfterDelete(deletedCount = 1) {
-    // 1) Actualiza el total local
     total.value = Math.max(0, Number(total.value) - Number(deletedCount));
 
-    // 2) Recalcula total de páginas y corrige si la actual quedó fuera de rango
     const r = Number(rows.value) || 10;
     const totalPages = Math.max(1, Math.ceil(total.value / r));
     if (Number(page.value) > totalPages) {
         page.value = totalPages;
     }
 
-    // 3) Recarga la página actual para “rellenar” hasta r filas
-    //    (si hay más ítems disponibles)
     return getProducts({ force: true });
 }
 

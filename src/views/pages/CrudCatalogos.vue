@@ -1,9 +1,9 @@
+SE
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import { api } from '@/api';
+import { api, ensureCsrf } from '@/api';
 
-const API = 'http://127.0.0.1:8000/api/v1/catalogos';
 const toast = useToast();
 
 const products = ref([]);
@@ -248,6 +248,8 @@ async function saveProduct() {
         return;
     }
     try {
+        await ensureCsrf();
+
         if (product.value.id) {
             await api.patch(`/catalogos/${product.value.id}`, product.value);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
@@ -255,6 +257,7 @@ async function saveProduct() {
             await api.post('/catalogos', product.value);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
+
         productDialog.value = false;
         await getProducts({ force: true });
     } catch (e) {
@@ -469,7 +472,7 @@ onMounted(() => getProducts());
         <!-- Confirmación de borrado -->
         <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
             <div>
-                ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.anio }}</b
+                ¿Seguro que quieres eliminar el programa <b>Id: {{ current?.id }}</b> — <b>{{ current?.programaAcademico }}</b
                 >?
             </div>
             <template #footer>
