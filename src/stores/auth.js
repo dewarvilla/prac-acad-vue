@@ -1,4 +1,4 @@
-import { api, http } from '@/api';
+import { api, ensureCsrf } from '@/api';
 import { defineStore } from 'pinia';
 
 export const useAuthStore = defineStore('auth', {
@@ -8,64 +8,89 @@ export const useAuthStore = defineStore('auth', {
         error: '',
         bootstrapped: false
     }),
+
     getters: {
-        isAuthenticated: (s) => !!s.me
+        isAuthenticated: (s) => !!s.me,
+
+        roles: (s) => s.me?.roles ?? [],
+        permissions: (s) => s.me?.permissions ?? [],
+
+        hasRole: (s) => (role) => (s.me?.roles ?? []).includes(role),
+        hasPermission: (s) => (perm) => (s.me?.permissions ?? []).includes(perm)
     },
+
     actions: {
         loadFromStorage() {
-            const raw = localStorage.getItem('me');
-            this.me = raw ? JSON.parse(raw) : null;
+            try {
+                const raw = localStorage.getItem('me');
+                this.me = raw ? JSON.parse(raw) : null;
+            } catch {
+                this.me = null;
+            }
         },
+
         saveToStorage() {
-            if (this.me) localStorage.setItem('me', JSON.stringify(this.me));
-            else localStorage.removeItem('me');
+            try {
+                if (this.me) {
+                    localStorage.setItem('me', JSON.stringify(this.me));
+                } else {
+                    localStorage.removeItem('me');
+                }
+            } catch {}
         },
-        async csrf() {
-            await http.get('/sanctum/csrf-cookie');
+
+        setMe(me) {
+            this.me = me;
+            this.saveToStorage();
         },
+
         async login(email, password) {
             this.loading = true;
             this.error = '';
+
             try {
-                await this.csrf();
+                await ensureCsrf();
                 await api.post('/login', { email, password });
                 const { data } = await api.get('/me');
-                this.me = data;
-                this.saveToStorage();
+                this.setMe(data);
             } catch (e) {
+                this.setMe(null);
                 this.error = e?.response?.data?.message || 'Error de autenticación';
-                this.me = null;
-                this.saveToStorage();
                 throw e;
             } finally {
                 this.loading = false;
             }
         },
+
         async fetchMe() {
             this.loading = true;
             this.error = '';
+
             try {
                 const { data } = await api.get('/me');
-                this.me = data;
-                this.saveToStorage();
+                this.setMe(data);
             } catch (e) {
-                this.me = null;
-                this.saveToStorage();
+                this.setMe(null);
                 throw e;
             } finally {
                 this.loading = false;
                 this.bootstrapped = true;
             }
         },
+
         async logout() {
             try {
+                await ensureCsrf(true);
                 await api.post('/logout');
-            } catch {}
-            this.me = null;
-            this.saveToStorage();
+            } catch {
+            } finally {
+                this.setMe(null);
+            }
         },
+
         async init() {
             this.loadFromStorage();
+
             try {
                 await this.fetchMe();
             } catch {}

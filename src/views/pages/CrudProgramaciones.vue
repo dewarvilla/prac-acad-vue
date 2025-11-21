@@ -4,6 +4,7 @@ import { useToast } from 'primevue/usetoast';
 import { api, ensureCsrf } from '@/api';
 import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
 import RouteMiniMap from '@/components/RouteMiniMap.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const routeEstimates = reactive({});
 const tableUid = `prog-${Math.random().toString(36).slice(2)}`;
@@ -12,10 +13,88 @@ const recId = `recursos-${uid}`;
 const jusId = `justificacion-${uid}`;
 const numEstId = `num-est-${uid}`;
 
+// ===== Auth / permisos =====
+const auth = useAuthStore();
+const hasPerm = (perm) => auth.hasPermission(perm);
+
+// Permisos CRUD de Programaciones
+const canViewProgramaciones = computed(() => hasPerm('programaciones.view'));
+const canCreateProgramaciones = computed(() => hasPerm('programaciones.create'));
+const canEditProgramaciones = computed(() => hasPerm('programaciones.edit'));
+const canDeleteProgramaciones = computed(() => hasPerm('programaciones.delete'));
+
 /* ========= API (relativas al baseURL de api) ========= */
 const API_PROG = '/programaciones';
 const API_CRE = '/creaciones';
 const API_RUTAS = '/rutas';
+
+// ======== Aprobaciones Programaciones  ========
+
+const approvalEndpoints = {
+    depart: {
+        approve: (id) => `${API_PROG}/${id}/aprobar/departamento`,
+        reject: (id) => `${API_PROG}/${id}/rechazar/departamento`
+    },
+    postg: {
+        approve: (id) => `${API_PROG}/${id}/aprobar/postgrados`,
+        reject: (id) => `${API_PROG}/${id}/rechazar/postgrados`
+    },
+    decano: {
+        approve: (id) => `${API_PROG}/${id}/aprobar/decano`,
+        reject: (id) => `${API_PROG}/${id}/rechazar/decano`
+    },
+    jefe_postg: {
+        approve: (id) => `${API_PROG}/${id}/aprobar/jefe-postgrados`,
+        reject: (id) => `${API_PROG}/${id}/rechazar/jefe-postgrados`
+    },
+    vice: {
+        approve: (id) => `${API_PROG}/${id}/aprobar/vicerrectoria`,
+        reject: (id) => `${API_PROG}/${id}/rechazar/vicerrectoria`
+    }
+};
+
+const estadoFieldByActor = {
+    depart: 'estadoDepart',
+    postg: 'estadoPostg',
+    decano: 'estadoDecano',
+    jefe_postg: 'estadoJefePostg',
+    vice: 'estadoVice'
+};
+
+const currentActorKey = computed(() => {
+    if (hasPerm('programaciones.aprobar.departamento') || hasPerm('programaciones.rechazar.departamento')) {
+        return 'depart';
+    }
+    if (hasPerm('programaciones.aprobar.postgrados') || hasPerm('programaciones.rechazar.postgrados')) {
+        return 'postg';
+    }
+    if (hasPerm('programaciones.aprobar.decano') || hasPerm('programaciones.rechazar.decano')) {
+        return 'decano';
+    }
+    if (hasPerm('programaciones.aprobar.jefe_postgrados') || hasPerm('programaciones.rechazar.jefe_postgrados')) {
+        return 'jefe_postg';
+    }
+    if (hasPerm('programaciones.aprobar.vicerrectoria') || hasPerm('programaciones.rechazar.vicerrectoria')) {
+        return 'vice';
+    }
+    return null;
+});
+
+function canApproveRow(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) return false;
+
+    if (['aprobada', 'rechazada'].includes(row.estadoPractica)) return false;
+
+    const field = estadoFieldByActor[actorKey];
+    if (!field) return false;
+
+    return row[field] === 'pendiente';
+}
+
+function canRejectRow(row) {
+    return canApproveRow(row);
+}
 
 const toast = useToast();
 
@@ -63,8 +142,17 @@ async function fetchEstimateForRoute(r, key) {
     try {
         await ensureCsrf();
         const { data } = await api.post('/compute-route', { origin: { lat: oLat, lng: oLng }, dest: { lat: dLat, lng: dLng }, mode: 'DRIVE' }, { timeout: 15000 });
-        routeEstimates[key].distance_m = Number(data?.distance_m ?? data?.distance ?? 0) || null;
-        routeEstimates[key].duration_s = Number(data?.duration_s ?? data?.duration ?? 0) || null;
+
+        const dist = Number(data?.distance_m ?? data?.distance ?? 0) || null;
+        const dur = Number(data?.duration_s ?? data?.duration ?? 0) || null;
+
+        routeEstimates[key].distance_m = dist;
+        routeEstimates[key].duration_s = dur;
+
+        if (r) {
+            if (r.distancia_m == null) r.distancia_m = dist;
+            if (r.duracion_s == null) r.duracion_s = dur;
+        }
     } catch (e) {
         routeEstimates[key].error = true;
     } finally {
@@ -90,6 +178,14 @@ const products = ref([]);
 const selected = ref([]);
 const sortField = ref('fechaInicio');
 const sortOrder = ref(-1);
+
+const approveLoading = ref(false);
+
+const rejectDialog = ref(false);
+const rejectLoading = ref(false);
+const rejectTarget = ref(null);
+const rejectJustificacion = ref('');
+const rejectError = ref('');
 
 /* ===== Búsqueda ===== */
 const search = ref('');
@@ -301,6 +397,22 @@ const detailsDialog = ref(false);
 const detailsLoading = ref(false);
 const details = ref([]);
 
+function normalizeRoute(it = {}) {
+    const r = { ...it };
+
+    r.origen_lat = r.origen_lat ?? r.origen?.lat ?? null;
+    r.origen_lng = r.origen_lng ?? r.origen?.lng ?? null;
+    r.destino_lat = r.destino_lat ?? r.destino?.lat ?? null;
+    r.destino_lng = r.destino_lng ?? r.destino?.lng ?? null;
+
+    r.distancia_m = r.distancia_m ?? r.distanciaM ?? null;
+    r.duracion_s = r.duracion_s ?? r.duracionS ?? null;
+    r.numero_peajes = r.numero_peajes ?? r.numeroPeajes ?? null;
+    r.valor_peajes = r.valor_peajes ?? r.valorPeajes ?? null;
+
+    return r;
+}
+
 async function openDetails() {
     if (!selected.value.length) return;
     const currentIds = new Set((products.value || []).map((p) => p.id));
@@ -325,12 +437,14 @@ async function openDetails() {
 
         for (const [i, p] of progs.entries()) {
             const rData = routeResults[i];
-            p.routes = rData.status === 'fulfilled' ? ((Array.isArray(rData.value.data) ? rData.value.data : rData.value.data?.data) ?? []) : [];
+            const baseRoutes = rData.status === 'fulfilled' ? ((Array.isArray(rData.value.data) ? rData.value.data : rData.value.data?.data) ?? []) : [];
 
+            p.routes = baseRoutes.map((it) => normalizeRoute(it));
             for (const r of p.routes) {
                 try {
                     const { data } = await api.get(`${API_RUTAS}/${r.id}`);
-                    Object.assign(r, data?.data ?? data);
+                    const merged = normalizeRoute(data?.data ?? data ?? {});
+                    Object.assign(r, merged);
                 } catch {
                     console.warn(`No se pudo actualizar la ruta ${r.id}`);
                 }
@@ -706,6 +820,132 @@ async function saveProduct() {
     }
 }
 
+// ==================== Aprobación Programaciones ====================
+async function approveRow(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Sin permisos',
+            detail: 'No tienes permisos para aprobar en esta etapa.',
+            life: 4000
+        });
+        return;
+    }
+
+    const endpoints = approvalEndpoints[actorKey];
+    if (!endpoints?.approve) return;
+
+    try {
+        approveLoading.value = true;
+        await ensureCsrf();
+
+        const { data } = await api.post(endpoints.approve(row.id));
+
+        if (!data?.ok) {
+            toast.add({
+                severity: 'warn',
+                summary: 'No se pudo aprobar',
+                detail: data?.message || 'El servidor rechazó la operación.',
+                life: 5000
+            });
+            return;
+        }
+
+        await getProducts({ force: true });
+
+        toast.add({
+            severity: 'success',
+            summary: 'Aprobado',
+            detail: 'La programación fue aprobada correctamente.',
+            life: 3000
+        });
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede aprobar' : 'Error al aprobar',
+            detail: `[${status ?? 'ERR'}] ${msg}`,
+            life: 6000
+        });
+    } finally {
+        approveLoading.value = false;
+    }
+}
+
+function openRejectDialog(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Sin permisos',
+            detail: 'No tienes permisos para rechazar en esta etapa.',
+            life: 4000
+        });
+        return;
+    }
+
+    rejectTarget.value = { row, actorKey };
+    rejectJustificacion.value = '';
+    rejectError.value = '';
+    rejectDialog.value = true;
+}
+
+function closeRejectDialog() {
+    rejectDialog.value = false;
+    rejectTarget.value = null;
+    rejectJustificacion.value = '';
+    rejectError.value = '';
+}
+
+async function confirmReject() {
+    if (!rejectJustificacion.value || rejectJustificacion.value.trim().length < 5) {
+        rejectError.value = 'La justificación debe tener mínimo 5 caracteres.';
+        return;
+    }
+
+    const target = rejectTarget.value;
+    if (!target) return;
+
+    const { row, actorKey } = target;
+    const endpoints = approvalEndpoints[actorKey];
+    if (!endpoints?.reject) return;
+
+    try {
+        rejectLoading.value = true;
+        rejectError.value = '';
+
+        await ensureCsrf();
+
+        const { data } = await api.post(endpoints.reject(row.id), {
+            justificacion: rejectJustificacion.value.trim()
+        });
+
+        if (!data?.ok) {
+            rejectError.value = data?.message || 'El servidor rechazó la operación.';
+            return;
+        }
+
+        await getProducts({ force: true });
+
+        toast.add({
+            severity: 'success',
+            summary: 'Rechazado',
+            detail: 'La programación fue rechazada correctamente.',
+            life: 3000
+        });
+
+        closeRejectDialog();
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        rejectError.value = `[${status ?? 'ERR'}] ${msg}`;
+    } finally {
+        rejectLoading.value = false;
+    }
+}
+
 /* ===== Delete / Bulk ===== */
 const deleteProductDialog = ref(false);
 const current = ref(null);
@@ -795,9 +1035,9 @@ onMounted(() => getProducts());
         <Toolbar class="mb-3">
             <template #start>
                 <div class="flex items-center gap-2 shrink-0">
-                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
-                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
-                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                    <Button v-if="canCreateProgramaciones" label="Crear" icon="pi pi-plus" @click="openNew" />
+                    <Button v-if="canDeleteProgramaciones" label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                    <Button v-if="canViewProgramaciones" label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
                 </div>
             </template>
 
@@ -881,10 +1121,15 @@ onMounted(() => getProducts());
                 <template #body="{ data }">{{ fmtDDMMYYYY(data.fechaFinalizacion) }}</template>
             </Column>
 
-            <Column :exportable="false" headerStyle="width:9rem">
+            <Column :exportable="false" headerStyle="width:11rem">
                 <template #body="{ data }">
-                    <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
-                    <Button icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
+                    <!-- Aprobar/Rechazar-->
+                    <Button v-if="canApproveRow(data)" icon="pi pi-check" rounded text severity="success" class="mr-1" :disabled="approveLoading" @click.stop="approveRow(data)" />
+                    <Button v-if="canRejectRow(data)" icon="pi pi-times" rounded text severity="warning" class="mr-1" :disabled="approveLoading" @click.stop="openRejectDialog(data)" />
+
+                    <!-- Editar/Borrar-->
+                    <Button v-if="canEditProgramaciones" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
+                    <Button v-if="canDeleteProgramaciones" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
                 </template>
             </Column>
         </DataTable>
@@ -1101,6 +1346,7 @@ onMounted(() => getProducts());
                 <Button label="Sí" icon="pi pi-check" severity="danger" @click="deleteProduct" />
             </template>
         </Dialog>
+
         <!-- Confirmar eliminar en bloque -->
         <Dialog v-model:visible="bulkDeleteDialog" header="Confirmar eliminación múltiple" :style="{ width: '28rem' }" :modal="true" appendTo="body">
             <div>
@@ -1109,6 +1355,28 @@ onMounted(() => getProducts());
             <template #footer>
                 <Button label="No" icon="pi pi-times" text @click="bulkDeleteDialog = false" />
                 <Button label="Sí" icon="pi pi-check" severity="danger" @click="bulkDelete" />
+            </template>
+        </Dialog>
+
+        <!-- Diálogo de rechazo de programación -->
+        <Dialog v-model:visible="rejectDialog" header="Rechazar programación" :style="{ width: '30rem' }" :modal="true" appendTo="body">
+            <div v-if="rejectTarget">
+                <p class="mb-3">
+                    Vas a rechazar la programación
+                    <b>Id: {{ rejectTarget.row.id }}</b>
+                    — <b>{{ rejectTarget.row.nombrePractica }}</b>
+                </p>
+
+                <div class="flex flex-col gap-2">
+                    <label for="reject-just" class="font-medium">Justificación</label>
+                    <Textarea id="reject-just" v-model.trim="rejectJustificacion" rows="4" autoResize :class="{ 'p-invalid': !!rejectError }" />
+                    <small v-if="rejectError" class="text-red-500">{{ rejectError }}</small>
+                </div>
+            </div>
+
+            <template #footer>
+                <Button label="Cancelar" icon="pi pi-times" text :disabled="rejectLoading" @click="closeRejectDialog" />
+                <Button label="Rechazar" icon="pi pi-check" severity="danger" :loading="rejectLoading" :disabled="rejectLoading" @click="confirmReject" />
             </template>
         </Dialog>
 

@@ -1,10 +1,9 @@
 import axios from 'axios';
 
-const API_HOST = import.meta.env.VITE_API_HOST || 'http://localhost:8000';
-const API_BASE = import.meta.env.VITE_API_BASE || `${API_HOST}/api/v1`;
+const API_HOST = import.meta.env.VITE_API_HOST ?? 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE ?? `${API_HOST}/api/v1`;
 
-export const http = axios.create({
-    baseURL: API_HOST,
+const commonConfig = {
     withCredentials: true,
     xsrfCookieName: 'XSRF-TOKEN',
     xsrfHeaderName: 'X-XSRF-TOKEN',
@@ -12,20 +11,28 @@ export const http = axios.create({
         'X-Requested-With': 'XMLHttpRequest',
         Accept: 'application/json'
     }
+};
+
+export const http = axios.create({
+    baseURL: API_HOST,
+    ...commonConfig
 });
 
 export const api = axios.create({
     baseURL: API_BASE,
-    withCredentials: true,
-    xsrfCookieName: 'XSRF-TOKEN',
-    xsrfHeaderName: 'X-XSRF-TOKEN',
-    headers: {
-        'X-Requested-With': 'XMLHttpRequest',
-        Accept: 'application/json'
-    }
+    ...commonConfig
 });
 
+let csrfLoaded = false;
+
+export async function ensureCsrf(force = false) {
+    if (csrfLoaded && !force) return;
+    await http.get('/sanctum/csrf-cookie', { withCredentials: true });
+    csrfLoaded = true;
+}
+
 function getXsrfFromCookie() {
+    if (typeof document === 'undefined') return null;
     const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : null;
 }
@@ -41,15 +48,16 @@ const attachCsrfHeader = (config) => {
 http.interceptors.request.use(attachCsrfHeader);
 api.interceptors.request.use(attachCsrfHeader);
 
-export async function ensureCsrf() {
-    await http.get('/sanctum/csrf-cookie', { withCredentials: true });
-}
-
 const onReject = (err) => {
-    if (err?.response?.status === 401 && window.location.pathname !== '/auth/login') {
-        window.localStorage.removeItem('me');
+    const status = err?.response?.status;
+
+    if (status === 401 && window.location.pathname !== '/auth/login') {
+        try {
+            window.localStorage.removeItem('me');
+        } catch {}
         window.location.href = '/auth/login';
     }
+
     return Promise.reject(err);
 };
 
