@@ -345,6 +345,7 @@ function onCreKeydown(e) {
 function selectCreacion(it) {
     product.value.creacion = it;
     product.value.nombrePractica = it?.label ?? '';
+    product.value.nivelAcademico = it?.nivel ?? null;
     creQuery.value = it?.label ?? '';
     closeCrePanel();
 }
@@ -413,6 +414,48 @@ function normalizeRoute(it = {}) {
     return r;
 }
 
+async function hydrateCreacionesForDetails(progs) {
+    const byId = new Map(selected.value.map((r) => [r.id, r]));
+
+    progs.forEach((p) => {
+        const base = byId.get(p.id);
+        if (!base) return;
+        p.creacionId = p.creacionId ?? p.creacion_id ?? base.creacionId ?? base.creacion_id ?? null;
+    });
+
+    const ids = [...new Set(progs.map((p) => p.creacionId ?? p.creacion_id).filter(Boolean))];
+
+    if (!ids.length) return;
+
+    const reqs = ids.map((id) => api.get(`${API_CRE}/${id}`));
+    const results = await Promise.allSettled(reqs);
+
+    const creMap = {};
+    results.forEach((res, idx) => {
+        if (res.status !== 'fulfilled') return;
+        const c = res.value.data?.data ?? res.value.data;
+        if (!c || c.id == null) return;
+        creMap[c.id] = c;
+    });
+
+    progs.forEach((p) => {
+        const cid = p.creacionId ?? p.creacion_id;
+        const c = cid ? creMap[cid] : null;
+        if (!c) return;
+
+        p.creacion = {
+            id: c.id,
+            programaAcademico: c.programaAcademico ?? c.programa_academico,
+            facultad: c.facultad,
+            nivelAcademico: c.nivelAcademico ?? c.nivel_academico
+        };
+
+        if (!p.nivelAcademico) {
+            p.nivelAcademico = p.creacion.nivelAcademico;
+        }
+    });
+}
+
 async function openDetails() {
     if (!selected.value.length) return;
     const currentIds = new Set((products.value || []).map((p) => p.id));
@@ -431,6 +474,8 @@ async function openDetails() {
             .filter((r) => r.status === 'fulfilled')
             .map((r) => r.value.data?.data ?? r.value.data)
             .filter(Boolean);
+
+        await hydrateCreacionesForDetails(progs);
 
         const routeReqs = progs.map((p) => api.get(API_RUTAS, { params: { programacion_id: p.id, page: 1, per_page: 200 } }));
         const routeResults = await Promise.allSettled(routeReqs);
@@ -456,6 +501,7 @@ async function openDetails() {
                 }
             });
         }
+
         details.value = progs;
 
         const fails = progResults.length - progs.length;
@@ -478,7 +524,7 @@ const productDialog = ref(false);
 const saving = ref(false);
 const product = ref({
     id: null,
-    creacion: null, // { id, label, programa, facultad, nivel }
+    creacion: null,
     nombrePractica: '',
     descripcion: '',
     requiereTransporte: false,
@@ -1027,6 +1073,19 @@ function fmtDDMMYYYY(v) {
     return `${dd}/${mm}/${year}`;
 }
 
+function nivelPractica(d) {
+    const raw = d?.nivelAcademico || d?.nivel_academico || d?.creacion?.nivelAcademico || d?.creacion?.nivel_academico || '';
+    const norm = raw.toString().trim().toLowerCase();
+
+    if (norm.startsWith('pre')) {
+        return 'pregrado';
+    }
+    if (norm.startsWith('post')) {
+        return 'postgrado';
+    }
+    return '';
+}
+
 onMounted(() => getProducts());
 </script>
 
@@ -1042,23 +1101,26 @@ onMounted(() => getProducts());
             </template>
 
             <template #end>
-                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
-                    <IconField class="w-full p-input-icon-left relative">
-                        <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
-                        <InputText
-                            id="progSearch"
-                            name="progSearch"
-                            v-model.trim="search"
-                            role="searchbox"
-                            placeholder="Escribe para buscar…"
-                            class="w-full h-10 leading-10 pr-8"
-                            autocomplete="off"
-                            @keydown.enter.prevent="forceFetch"
-                            @keydown.esc.prevent="clearSearch"
-                        />
-                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch" aria-label="Limpiar búsqueda">X</button>
-                    </IconField>
-                </form>
+                <div class="flex items-center gap-3 w-full justify-end">
+                    <!-- Buscador -->
+                    <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                        <IconField class="w-full p-input-icon-left relative">
+                            <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                            <InputText
+                                id="progSearch"
+                                name="progSearch"
+                                v-model.trim="search"
+                                role="searchbox"
+                                placeholder="Escribe para buscar…"
+                                class="w-full h-10 leading-10 pr-8"
+                                autocomplete="off"
+                                @keydown.enter.prevent="forceFetch"
+                                @keydown.esc.prevent="clearSearch"
+                            />
+                            <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch" aria-label="Limpiar búsqueda">X</button>
+                        </IconField>
+                    </form>
+                </div>
             </template>
         </Toolbar>
 
@@ -1454,6 +1516,48 @@ onMounted(() => getProducts());
                             <div class="text-sm font-semibold">Descripción</div>
                             <div class="whitespace-pre-line break-words">{{ d.descripcion }}</div>
                         </div>
+                    </div>
+
+                    <!-- Estados -->
+                    <div class="mt-4 space-y-3">
+                        <!-- PREGRADO -->
+                        <template v-if="nivelPractica(d) === 'pregrado'">
+                            <div>
+                                <div class="text-sm font-semibold">Estado Jefe Departamento</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoDepart }}</div>
+                            </div>
+                            <div>
+                                <div class="text-sm font-semibold">Estado Decano</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoDecano }}</div>
+                            </div>
+                            <div>
+                                <div class="text-sm font-semibold">Estado Vicerrectoría</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoVice }}</div>
+                            </div>
+                        </template>
+
+                        <!-- POSTGRADO-->
+                        <template v-else-if="nivelPractica(d) === 'postgrado'">
+                            <div>
+                                <div class="text-sm font-semibold">Estado Coordinador Postgrados</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoPostg }}</div>
+                            </div>
+                            <div>
+                                <div class="text-sm font-semibold">Estado Jefe Postgrados</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoJefePostg }}</div>
+                            </div>
+                            <div>
+                                <div class="text-sm font-semibold">Estado Vicerrectoría</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoVice }}</div>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                            <div>
+                                <div class="text-sm font-semibold">Estado Vicerrectoría</div>
+                                <div class="whitespace-pre-line break-words">{{ d.estadoVice }}</div>
+                            </div>
+                        </template>
                     </div>
 
                     <!-- Auditoria -->

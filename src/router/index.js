@@ -30,11 +30,11 @@ const router = createRouter({
 
                 { path: 'pages/empty', name: 'empty', component: () => import('@/views/pages/Empty.vue') },
                 { path: 'pages/crud', name: 'crud', component: () => import('@/views/pages/Crud.vue') },
-                { path: 'pages/crudSalarios', name: 'crudSalarios', component: () => import('@/views/pages/CrudSalarios.vue') },
-                { path: 'pages/crudCatalogos', name: 'crudCatalogos', component: () => import('@/views/pages/CrudCatalogos.vue') },
-                { path: 'pages/crudProgramaciones', name: 'crudProgramaciones', component: () => import('@/views/pages/CrudProgramaciones.vue') },
-                { path: 'pages/crudCreaciones', name: 'crudCreaciones', component: () => import('@/views/pages/CrudCreaciones.vue') },
-                { path: 'pages/crudFechas', name: 'crudFechas', component: () => import('@/views/pages/CrudFechas.vue') },
+                { path: 'pages/salarios', name: 'salarios', component: () => import('@/views/pages/Salarios.vue') },
+                { path: 'pages/catalogos', name: 'catalogos', component: () => import('@/views/pages/Catalogos.vue') },
+                { path: 'pages/programaciones', name: 'programaciones', component: () => import('@/views/pages/Programaciones.vue') },
+                { path: 'pages/creaciones', name: 'creaciones', component: () => import('@/views/pages/Creaciones.vue') },
+                { path: 'pages/fechas', name: 'fechas', component: () => import('@/views/pages/Fechas.vue') },
 
                 { path: 'documentation', name: 'documentation', component: () => import('@/views/pages/Documentation.vue') },
                 { path: 'mapa', name: 'mapa', component: () => import('@/views/MapView.vue') }

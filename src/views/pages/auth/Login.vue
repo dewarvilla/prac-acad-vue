@@ -61,10 +61,12 @@ async function onSubmit(e) {
                         </div>
 
                         <div class="mb-4">
-                            <label for="password1" class="block text-surface-900 dark:text-surface-0 font-medium text-xl mb-2">Contraseña</label>
-                            <Password id="password1" v-model="password" placeholder="••••••••" :toggleMask="true" fluid :feedback="false" autocomplete="current-password" :invalid="auth.error && !password" />
+                            <div class="mb-4">
+                                <label for="password1" class="block text-surface-900 dark:text-surface-0 font-medium text-xl mb-2"> Contraseña </label>
+                                <Password inputId="password1" v-model="password" placeholder="••••••••" :toggleMask="true" fluid :feedback="false" autocomplete="current-password" :invalid="auth.error && !password" />
+                            </div>
                         </div>
-
+                        <!-- 
                         <div class="flex items-center justify-between mt-2 mb-4 gap-8">
                             <div class="flex items-center">
                                 <Checkbox v-model="remember" inputId="rememberme1" binary class="mr-2" />
@@ -72,7 +74,7 @@ async function onSubmit(e) {
                             </div>
                             <RouterLink to="/auth/access" class="font-medium no-underline ml-2 text-right cursor-pointer text-primary">¿Olvidaste tu contraseña?</RouterLink>
                         </div>
-
+ -->
                         <Message v-if="auth.error" severity="error" class="mb-4" :closable="false">
                             {{ auth.error }}
                         </Message>

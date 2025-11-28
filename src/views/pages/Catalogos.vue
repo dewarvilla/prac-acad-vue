@@ -448,9 +448,11 @@ onMounted(() => getProducts());
         <Dialog v-model:visible="productDialog" header="Creación de programa académico por facultad" :style="{ width: '36rem' }" :modal="true">
             <div class="flex flex-col gap-4">
                 <div class="flex flex-col gap-2">
-                    <label for="nivelAcademico">Nivel académico</label>
-                    <Select id="nivelAcademico" v-model="product.nivelAcademico" :options="dropdownNivelAcademico" optionLabel="name" optionValue="code" placeholder="Nivel Académico" fluid />
-                    <small v-if="showError('nivelAcademico')" class="text-red-500">{{ errors.nivelAcademico }}</small>
+                    <span id="nivelAcademico-label" class="font-medium"> Nivel académico </span>
+                    <Select v-model="product.nivelAcademico" :options="dropdownNivelAcademico" optionLabel="name" optionValue="code" placeholder="Nivel Académico" fluid aria-labelledby="nivelAcademico-label" />
+                    <small v-if="showError('nivelAcademico')" class="text-red-500">
+                        {{ errors.nivelAcademico }}
+                    </small>
                 </div>
                 <div class="flex flex-col gap-2">
                     <label for="facultad">Facultad Académica</label>

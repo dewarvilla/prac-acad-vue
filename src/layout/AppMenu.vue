@@ -11,11 +11,11 @@ const model = ref([
     {
         label: 'UI Components',
         items: [
-            { label: 'Catalogos', icon: 'pi pi-fw pi-list-check', to: '/pages/crudCatalogos' },
-            { label: 'Salarios', icon: 'pi pi-fw pi-money-bill', to: '/pages/crudSalarios' },
-            { label: 'Definición de fechas', icon: 'pi pi-fw pi-calendar', to: '/pages/crudFechas' },
-            { label: 'Creación de practicas', icon: 'pi pi-fw pi-plus', to: '/pages/crudCreaciones' },
-            { label: 'Programación de praticas', icon: 'pi pi-fw pi-calendar-plus', to: '/pages/crudProgramaciones' },
+            { label: 'Catalogos', icon: 'pi pi-fw pi-list-check', to: '/pages/catalogos' },
+            { label: 'Salarios', icon: 'pi pi-fw pi-money-bill', to: '/pages/salarios' },
+            { label: 'Definición de fechas', icon: 'pi pi-fw pi-calendar', to: '/pages/fechas' },
+            { label: 'Creación de practicas', icon: 'pi pi-fw pi-plus', to: '/pages/creaciones' },
+            { label: 'Programación de praticas', icon: 'pi pi-fw pi-calendar-plus', to: '/pages/programaciones' },
             { label: 'List', icon: 'pi pi-fw pi-list', to: '/uikit/list' },
             { label: 'Tree', icon: 'pi pi-fw pi-share-alt', to: '/uikit/tree' },
             { label: 'Panel', icon: 'pi pi-fw pi-tablet', to: '/uikit/panel' },
