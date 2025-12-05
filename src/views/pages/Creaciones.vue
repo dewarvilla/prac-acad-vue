@@ -2,8 +2,71 @@
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
 import { api, ensureCsrf } from '@/api';
+import { useAuthStore } from '@/stores/auth';
 
 const toast = useToast();
+
+const auth = useAuthStore();
+const hasPerm = (perm) => auth.hasPermission(perm);
+
+const canViewCreaciones = computed(() => hasPerm('creaciones.view'));
+const canCreateCreaciones = computed(() => hasPerm('creaciones.create'));
+const canEditCreaciones = computed(() => hasPerm('creaciones.edit'));
+const canDeleteCreaciones = computed(() => hasPerm('creaciones.delete'));
+
+// ======== Aprobaciones Creaciones  ========
+
+const API_CRE = '/creaciones';
+
+const approvalEndpoints = {
+    depart: {
+        approve: (id) => `${API_CRE}/${id}/aprobar/departamento`,
+        reject: (id) => `${API_CRE}/${id}/rechazar/departamento`
+    },
+    consejo_fac: {
+        approve: (id) => `${API_CRE}/${id}/aprobar/consejo-facultad`,
+        reject: (id) => `${API_CRE}/${id}/rechazar/consejo-facultad`
+    },
+    consejo_acad: {
+        approve: (id) => `${API_CRE}/${id}/aprobar/consejo-academico`,
+        reject: (id) => `${API_CRE}/${id}/rechazar/consejo-academico`
+    }
+};
+
+const estadoFieldByActor = {
+    depart: 'estadoDepart',
+    consejo_fac: 'estadoConsejoFacultad',
+    consejo_acad: 'estadoConsejoAcademico'
+};
+
+const currentActorKey = computed(() => {
+    if (hasPerm('creaciones.aprobar.departamento') || hasPerm('creaciones.rechazar.departamento')) {
+        return 'depart';
+    }
+    if (hasPerm('creaciones.aprobar.consejo_facultad') || hasPerm('creaciones.rechazar.consejo_facultad')) {
+        return 'consejo_fac';
+    }
+    if (hasPerm('creaciones.aprobar.consejo_academico') || hasPerm('creaciones.rechazar.consejo_academico')) {
+        return 'consejo_acad';
+    }
+    return null;
+});
+
+function canApproveRow(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) return false;
+
+    if (['aprobada', 'rechazada'].includes(row.estadoPractica)) return false;
+
+    const field = estadoFieldByActor[actorKey];
+    if (!field) return false;
+
+    return row[field] === 'pendiente';
+}
+
+function canRejectRow(row) {
+    return canApproveRow(row);
+}
 
 const tableUid = `cre-${Math.random().toString(36).slice(2)}`;
 
@@ -365,6 +428,14 @@ function editProduct(row) {
     productDialog.value = true;
 }
 
+const approveLoading = ref(false);
+
+const rejectDialog = ref(false);
+const rejectLoading = ref(false);
+const rejectTarget = ref(null);
+const rejectJustificacion = ref('');
+const rejectError = ref('');
+
 /* ===== Guardar ===== */
 const saving = ref(false);
 async function saveProduct() {
@@ -401,6 +472,132 @@ async function saveProduct() {
         });
     } finally {
         saving.value = false;
+    }
+}
+
+// ==================== Aprobación Creaciones ====================
+async function approveRow(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Sin permisos',
+            detail: 'No tienes permisos para aprobar en esta etapa.',
+            life: 4000
+        });
+        return;
+    }
+
+    const endpoints = approvalEndpoints[actorKey];
+    if (!endpoints?.approve) return;
+
+    try {
+        approveLoading.value = true;
+        await ensureCsrf();
+
+        const { data } = await api.post(endpoints.approve(row.id));
+
+        if (!data?.ok) {
+            toast.add({
+                severity: 'warn',
+                summary: 'No se pudo aprobar',
+                detail: data?.message || 'El servidor rechazó la operación.',
+                life: 5000
+            });
+            return;
+        }
+
+        await getProducts({ force: true });
+
+        toast.add({
+            severity: 'success',
+            summary: 'Aprobado',
+            detail: 'La creación fue aprobada correctamente.',
+            life: 3000
+        });
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede aprobar' : 'Error al aprobar',
+            detail: `[${status ?? 'ERR'}] ${msg}`,
+            life: 6000
+        });
+    } finally {
+        approveLoading.value = false;
+    }
+}
+
+function openRejectDialog(row) {
+    const actorKey = currentActorKey.value;
+    if (!actorKey) {
+        toast.add({
+            severity: 'warn',
+            summary: 'Sin permisos',
+            detail: 'No tienes permisos para rechazar en esta etapa.',
+            life: 4000
+        });
+        return;
+    }
+
+    rejectTarget.value = { row, actorKey };
+    rejectJustificacion.value = '';
+    rejectError.value = '';
+    rejectDialog.value = true;
+}
+
+function closeRejectDialog() {
+    rejectDialog.value = false;
+    rejectTarget.value = null;
+    rejectJustificacion.value = '';
+    rejectError.value = '';
+}
+
+async function confirmReject() {
+    if (!rejectJustificacion.value || rejectJustificacion.value.trim().length < 5) {
+        rejectError.value = 'La justificación debe tener mínimo 5 caracteres.';
+        return;
+    }
+
+    const target = rejectTarget.value;
+    if (!target) return;
+
+    const { row, actorKey } = target;
+    const endpoints = approvalEndpoints[actorKey];
+    if (!endpoints?.reject) return;
+
+    try {
+        rejectLoading.value = true;
+        rejectError.value = '';
+
+        await ensureCsrf();
+
+        const { data } = await api.post(endpoints.reject(row.id), {
+            justificacion: rejectJustificacion.value.trim()
+        });
+
+        if (!data?.ok) {
+            rejectError.value = data?.message || 'El servidor rechazó la operación.';
+            return;
+        }
+
+        await getProducts({ force: true });
+
+        toast.add({
+            severity: 'success',
+            summary: 'Rechazado',
+            detail: 'La creación fue rechazada correctamente.',
+            life: 3000
+        });
+
+        closeRejectDialog();
+    } catch (e) {
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        rejectError.value = `[${status ?? 'ERR'}] ${msg}`;
+    } finally {
+        rejectLoading.value = false;
     }
 }
 
@@ -480,22 +677,35 @@ onMounted(async () => {
         <Toolbar class="mb-3">
             <template #start>
                 <div class="flex items-center gap-2 shrink-0">
-                    <Button label="Crear" icon="pi pi-plus" @click="openNew" />
-                    <Button label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
-                    <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
+                    <Button v-if="canCreateCreaciones" label="Crear" icon="pi pi-plus" @click="openNew" />
+                    <Button v-if="canDeleteCreaciones" label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                    <Button v-if="canViewCreaciones" label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
                 </div>
             </template>
 
             <template #center />
 
             <template #end>
-                <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
-                    <IconField class="w-full p-input-icon-left relative">
-                        <InputIcon class="pi pi-search" />
-                        <InputText id="tableSearch" name="tableSearch" v-model.trim="search" role="searchbox" placeholder="Escribe para buscar…" class="w-full h-10 leading-10 pr-8" />
-                        <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch">X</button>
-                    </IconField>
-                </form>
+                <div class="flex items-center gap-3 w-full justify-end">
+                    <!-- Buscador -->
+                    <form role="search" class="min-w-0 w-full sm:w-80 md:w-[26rem]" @submit.prevent="forceFetch">
+                        <IconField class="w-full p-input-icon-left relative">
+                            <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                            <InputText
+                                id="creSearch"
+                                name="creSearch"
+                                v-model.trim="search"
+                                role="searchbox"
+                                placeholder="Escribe para buscar…"
+                                class="w-full h-10 leading-10 pr-8"
+                                autocomplete="off"
+                                @keydown.enter.prevent="forceFetch"
+                                @keydown.esc.prevent="clearSearch"
+                            />
+                            <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch" aria-label="Limpiar búsqueda">X</button>
+                        </IconField>
+                    </form>
+                </div>
             </template>
         </Toolbar>
 
@@ -519,7 +729,9 @@ onMounted(async () => {
             emptyMessage="No hay registros"
             :pt="{
                 paginator: {
-                    rowsPerPageDropdown: { input: { id: 'dt-rows-per-page', name: 'dt-rows-per-page' } },
+                    rowsPerPageDropdown: {
+                        input: { id: 'cre-rows-per-page', name: 'cre-rows-per-page' }
+                    },
                     firstPageButton: { root: { 'aria-label': 'Primera página' } },
                     prevPageButton: { root: { 'aria-label': 'Página anterior' } },
                     nextPageButton: { root: { 'aria-label': 'Siguiente página' } },
@@ -543,15 +755,26 @@ onMounted(async () => {
                     <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
                 </template>
             </Column>
-            <Column field="id" header="id" sortable style="min-width: 6rem" />
-            <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 12rem" />
-            <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem" />
-            <Column field="estadoPractica" header="Estado de la práctica" sortable style="min-width: 12rem" />
-
-            <Column :exportable="false" headerStyle="width:9rem">
+            <Column field="id" header="id" sortable style="min-width: 5rem; width: 5rem" />
+            <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 14rem" />
+            <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem">
                 <template #body="{ data }">
-                    <Button icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
-                    <Button icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
+                    <span>
+                        {{ typeof data.programaAcademico === 'string' ? data.programaAcademico : (data.programaAcademico?.label ?? data.programaAcademico?.nombre ?? '') }}
+                    </span>
+                </template>
+            </Column>
+
+            <Column field="estadoPractica" header="Estado de la práctica" sortable style="min-width: 10rem" />
+
+            <Column :exportable="false" headerStyle="width:11rem">
+                <template #body="{ data }">
+                    <!-- Aprobar/Rechazar-->
+                    <Button v-if="canApproveRow(data)" icon="pi pi-check" rounded text severity="success" class="mr-1" :disabled="approveLoading" @click.stop="approveRow(data)" />
+                    <Button v-if="canRejectRow(data)" icon="pi pi-times" rounded text severity="warning" class="mr-1" :disabled="approveLoading" @click.stop="openRejectDialog(data)" />
+                    <!-- Editar/Borrar -->
+                    <Button v-if="canEditCreaciones" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
+                    <Button v-if="canDeleteCreaciones" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
                 </template>
             </Column>
         </DataTable>
@@ -662,6 +885,27 @@ onMounted(async () => {
             <template #footer>
                 <Button label="No" icon="pi pi-times" text @click="deleteProductDialog = false" />
                 <Button label="Sí" icon="pi pi-check" severity="danger" @click="deleteProduct" />
+            </template>
+        </Dialog>
+
+        <!-- Diálogo de rechazo de creación -->
+        <Dialog v-model:visible="rejectDialog" header="Rechazar creación" :style="{ width: '30rem' }" :modal="true">
+            <div v-if="rejectTarget">
+                <p class="mb-3">
+                    Vas a rechazar la creación
+                    <b>Id: {{ rejectTarget.row.id }}</b>
+                    — <b>{{ rejectTarget.row.nombrePractica }}</b>
+                </p>
+
+                <div class="flex flex-col gap-2">
+                    <label for="reject-just" class="font-medium">Justificación</label>
+                    <Textarea id="reject-just" v-model.trim="rejectJustificacion" rows="4" autoResize :class="{ 'p-invalid': !!rejectError }" />
+                    <small v-if="rejectError" class="text-red-500">{{ rejectError }}</small>
+                </div>
+            </div>
+            <template #footer>
+                <Button label="Cancelar" icon="pi pi-times" text :disabled="rejectLoading" @click="closeRejectDialog" />
+                <Button label="Rechazar" icon="pi pi-check" severity="danger" :loading="rejectLoading" :disabled="rejectLoading" @click="confirmReject" />
             </template>
         </Dialog>
 
