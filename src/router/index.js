@@ -36,6 +36,13 @@ const router = createRouter({
                 { path: 'pages/creaciones', name: 'creaciones', component: () => import('@/views/pages/Creaciones.vue') },
                 { path: 'pages/fechas', name: 'fechas', component: () => import('@/views/pages/Fechas.vue') },
 
+                {
+                    path: 'pages/aprobaciones',
+                    name: 'approvalsInbox',
+                    component: () => import('@/components/ApprovalInbox.vue'),
+                    meta: { requiresAuth: true, permission: 'approvals.inbox' }
+                },
+
                 { path: 'documentation', name: 'documentation', component: () => import('@/views/pages/Documentation.vue') },
                 { path: 'mapa', name: 'mapa', component: () => import('@/views/MapView.vue') }
             ]
@@ -44,10 +51,10 @@ const router = createRouter({
         // Públicas
         { path: '/landing', name: 'landing', component: () => import('@/views/pages/Landing.vue') },
 
-        // Auth (solo invitados)
+        // Auth
         { path: '/auth/login', name: 'login', meta: { guestOnly: true }, component: () => import('@/views/pages/auth/Login.vue') },
-        { path: '/auth/access', name: 'accessDenied', meta: { guestOnly: true }, component: () => import('@/views/pages/auth/Access.vue') },
-        { path: '/auth/error', name: 'error', meta: { guestOnly: true }, component: () => import('@/views/pages/auth/Error.vue') },
+        { path: '/auth/access', name: 'accessDenied', meta: { requiresAuth: true }, component: () => import('@/views/pages/auth/Access.vue') },
+        { path: '/auth/error', name: 'error', component: () => import('@/views/pages/auth/Error.vue') },
 
         // 404
         { path: '/pages/notfound', name: 'notfound', component: () => import('@/views/pages/NotFound.vue') },
@@ -73,6 +80,10 @@ router.beforeEach(async (to) => {
 
     if (to.meta.guestOnly && auth.isAuthenticated) {
         return { name: 'dashboard' };
+    }
+
+    if (to.meta.permission && !auth.hasPermission(to.meta.permission)) {
+        return { name: 'accessDenied' };
     }
 
     return true;
