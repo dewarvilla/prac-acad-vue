@@ -57,7 +57,7 @@ async function onSubmit(e) {
                     <div class="max-w-[30rem] mx-auto w-full">
                         <div class="mb-8">
                             <label for="email1" class="block text-surface-900 dark:text-surface-0 text-xl font-medium mb-2">Email</label>
-                            <InputText id="email1" type="email" inputmode="email" autocomplete="username" placeholder="correo@dominio.com" class="w-full" v-model="email" :invalid="auth.error && !email" />
+                            <InputText id="email1" type="text" autocomplete="username" placeholder="usuario o correo" class="w-full" v-model="email" :invalid="auth.error && !email" />
                         </div>
 
                         <div class="mb-4">

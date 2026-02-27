@@ -6,7 +6,7 @@ import { useLayout } from '@/layout/composables/layout';
 import AppConfigurator from './AppConfigurator.vue';
 import NotificationsBell from '@/components/NotificationsBell.vue';
 
-import { api, ensureCsrf } from '@/api';
+import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 
 const { toggleMenu, toggleDarkMode, isDarkTheme } = useLayout();
@@ -19,21 +19,10 @@ const loggingOut = ref(false);
 const handleLogout = async () => {
     if (loggingOut.value) return;
     loggingOut.value = true;
-
     try {
-        await ensureCsrf();
-        await api.post('/logout');
-    } catch (e) {
-        console.error('Error al cerrar sesión', e);
+        await auth.logout();
     } finally {
-        if (typeof auth.logout === 'function') {
-            auth.logout();
-        } else if (typeof auth.$reset === 'function') {
-            auth.$reset();
-        }
-
         loggingOut.value = false;
-
         router.push('/auth/login');
     }
 };

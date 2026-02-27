@@ -4,9 +4,7 @@ const API_HOST = import.meta.env.VITE_API_HOST ?? 'http://localhost:8000';
 const API_BASE = import.meta.env.VITE_API_BASE ?? `${API_HOST}/api/v1`;
 
 const commonConfig = {
-    withCredentials: true,
-    xsrfCookieName: 'XSRF-TOKEN',
-    xsrfHeaderName: 'X-XSRF-TOKEN',
+    withCredentials: false,
     headers: {
         'X-Requested-With': 'XMLHttpRequest',
         Accept: 'application/json'
@@ -23,36 +21,24 @@ export const api = axios.create({
     ...commonConfig
 });
 
-let csrfLoaded = false;
-
-export async function ensureCsrf(force = false) {
-    if (csrfLoaded && !force) return;
-    await http.get('/sanctum/csrf-cookie', { withCredentials: true });
-    csrfLoaded = true;
-}
-
-function getXsrfFromCookie() {
-    if (typeof document === 'undefined') return null;
-    const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-}
-
-const attachCsrfHeader = (config) => {
-    const token = getXsrfFromCookie();
-    if (token) {
-        config.headers['X-XSRF-TOKEN'] = token;
-    }
+const attachBearer = (config) => {
+    try {
+        const token = window.localStorage.getItem('token');
+        if (token) config.headers.Authorization = `Bearer ${token}`;
+    } catch {}
     return config;
 };
 
-http.interceptors.request.use(attachCsrfHeader);
-api.interceptors.request.use(attachCsrfHeader);
+http.interceptors.request.use(attachBearer);
+api.interceptors.request.use(attachBearer);
 
+// ====== 401 handler ======
 const onReject = (err) => {
     const status = err?.response?.status;
 
     if (status === 401 && window.location.pathname !== '/auth/login') {
         try {
+            window.localStorage.removeItem('token');
             window.localStorage.removeItem('me');
         } catch {}
         window.location.href = '/auth/login';
@@ -63,3 +49,11 @@ const onReject = (err) => {
 
 http.interceptors.response.use((r) => r, onReject);
 api.interceptors.response.use((r) => r, onReject);
+
+export function setToken(token) {
+    window.localStorage.setItem('token', token);
+}
+
+export function clearToken() {
+    window.localStorage.removeItem('token');
+}

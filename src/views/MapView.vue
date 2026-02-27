@@ -15,7 +15,7 @@ onMounted(async () => {
         attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // Llama a tu API de Laravel
+    // Llamar API de Laravel
     const { data } = await axios.post('http://127.0.0.1:8000/api/v1/compute-route', {
         origin: { lat: 8.789478076658922, lng: -75.85682013938368 },
         dest: { lat: 8.882344202163397, lng: -75.7018615673633 },
@@ -29,7 +29,7 @@ onMounted(async () => {
     L.polyline(latlngs, { weight: 5 }).addTo(map);
     map.fitBounds(L.polyline(latlngs).getBounds());
 
-    // Marcadores opcionales
+    // Marcadores
     L.marker(latlngs[0]).addTo(map).bindPopup('Origen');
     L.marker(latlngs[latlngs.length - 1])
         .addTo(map)

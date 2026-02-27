@@ -11,7 +11,8 @@ const model = ref([
     {
         label: 'UI Components',
         items: [
-            { label: 'Catalogos', icon: 'pi pi-fw pi-list-check', to: '/pages/catalogos' },
+            { label: 'Catálogos', icon: 'pi pi-fw pi-list-check', to: '/pages/catalogos' },
+            { label: 'Materias', icon: 'pi pi-fw pi-list-check', to: '/pages/materias' },
             { label: 'Salarios', icon: 'pi pi-fw pi-money-bill', to: '/pages/salarios' },
             { label: 'Definición de fechas', icon: 'pi pi-fw pi-calendar', to: '/pages/fechas' },
             { label: 'Creación de practicas', icon: 'pi pi-fw pi-plus', to: '/pages/creaciones' },

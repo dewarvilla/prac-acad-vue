@@ -9,25 +9,26 @@ const auth = useAuthStore();
 const hasPerm = (perm) => auth.hasPermission(perm);
 
 // -------------------------
-// Permisos CRUD (Catálogos)
+// Permisos
 // -------------------------
-const canViewCatalogos = computed(() => hasPerm('catalogos.view'));
-const canCreateCatalogos = computed(() => hasPerm('catalogos.create'));
-const canEditCatalogos = computed(() => hasPerm('catalogos.edit'));
-const canDeleteCatalogos = computed(() => hasPerm('catalogos.delete'));
+const canViewMaterias = computed(() => hasPerm('materias.view'));
+const canCreateMaterias = computed(() => hasPerm('materias.create'));
+const canEditMaterias = computed(() => hasPerm('materias.edit'));
+const canDeleteMaterias = computed(() => hasPerm('materias.delete'));
 
-const canAccessModule = computed(() => canViewCatalogos.value);
+const canAccessModule = computed(() => canViewMaterias.value);
 
 // -------------------------
-// Endpoints (SOLO CRUD)
+// Endpoints
 // -------------------------
-const API_CAT = '/catalogos';
-const API_CAT_BULK = '/catalogos/bulk';
+const API_MAT = '/materias';
+const API_MAT_BULK = '/materias/bulk'; // si implementas el upsert masivo
+// Bulk delete usa `${API_MAT}/bulk-delete` igual que Catálogos
 
 // -------------------------
 // Tabla base
 // -------------------------
-const tableUid = `cat-${Math.random().toString(36).slice(2)}`;
+const tableUid = `mat-${Math.random().toString(36).slice(2)}`;
 
 const products = ref([]);
 const selected = ref([]);
@@ -43,7 +44,7 @@ function toggleAll(e) {
 const page = ref(1);
 const rows = ref(10);
 const total = ref(0);
-const sortField = ref('facultad');
+const sortField = ref('codigo');
 const sortOrder = ref(1);
 
 // -------------------------
@@ -56,38 +57,44 @@ let typingTimer = null;
 let activeCtrl = null;
 
 // -------------------------
-// Helpers vista (como Creaciones)
+// Helpers vista
 // -------------------------
-function prettyNivel(v) {
-    const s = String(v ?? '')
-        .trim()
-        .toLowerCase();
-    if (s === 'postgrado') return 'Postgrado';
-    if (s === 'pregrado') return 'Pregrado';
-    return s ? s.replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
-}
-
 function estadoLabel(v) {
     if (v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true') return 'Activo';
     if (v === false || v === 0 || v === '0' || String(v).toLowerCase() === 'false') return 'Inactivo';
     return '—';
 }
-
 function estadoSeverity(v) {
-    // Activo verde, Inactivo gris (como tag)
     if (v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true') return 'success';
     if (v === false || v === 0 || v === '0' || String(v).toLowerCase() === 'false') return 'secondary';
+    return 'info';
+}
+function prettyEstadoMateria(v) {
+    const s = String(v ?? '')
+        .trim()
+        .toLowerCase();
+    if (s === 'activa') return 'Activa';
+    if (s === 'inactiva') return 'Inactiva';
+    return s ? s.replace(/\b\w/g, (c) => c.toUpperCase()) : '—';
+}
+function estadoMateriaSeverity(v) {
+    const s = String(v ?? '')
+        .trim()
+        .toLowerCase();
+    if (s === 'activa') return 'success';
+    if (s === 'inactiva') return 'secondary';
     return 'info';
 }
 
 // -------------------------
 // Parametrización (sort/search/paginación)
 // -------------------------
-const SORT_MAP_CAT = {
+const SORT_MAP_MAT = {
     id: 'id',
-    nivelAcademico: 'nivel_academico',
-    facultad: 'facultad',
-    programaAcademico: 'programa_academico',
+    codigo: 'codigo',
+    nombre: 'nombre',
+    creditos: 'creditos',
+    estadoMateria: 'estado_materia',
     estado: 'estado',
     createdAt: 'created_at',
     updatedAt: 'updated_at'
@@ -100,11 +107,11 @@ function mapSort(uiField, order, map) {
     return `${order === -1 ? '-' : ''}${apiField}`;
 }
 
-const sortParamCat = computed(() => mapSort(sortField.value, sortOrder.value, SORT_MAP_CAT));
+const sortParamMat = computed(() => mapSort(sortField.value, sortOrder.value, SORT_MAP_MAT));
 
 function buildParams({ force = false } = {}) {
     const params = { per_page: +rows.value || 10, page: +page.value || 1 };
-    const sp = sortParamCat.value;
+    const sp = sortParamMat.value;
     if (sp) params.sort = sp;
 
     const raw = String(search.value || '').trim();
@@ -128,7 +135,7 @@ async function getProducts(opts = {}) {
     loading.value = true;
 
     try {
-        const { data } = await api.get(API_CAT, { params: buildParams({ force }), signal });
+        const { data } = await api.get(API_MAT, { params: buildParams({ force }), signal });
 
         if (Array.isArray(data)) {
             products.value = data;
@@ -223,20 +230,21 @@ function clearSearch() {
 // CRUD
 // -------------------------
 const productDialog = ref(false);
-const product = ref({ id: null, nivelAcademico: 'pregrado', facultad: '', programaAcademico: '' });
+const product = ref({ id: null, codigo: '', nombre: '', creditos: null, estadoMateria: 'activa' });
 
-const nivelOptions = [
-    { label: 'Pregrado', value: 'pregrado' },
-    { label: 'Postgrado', value: 'postgrado' }
+const estadoMateriaOptions = [
+    { label: 'Activa', value: 'activa' },
+    { label: 'Inactiva', value: 'inactiva' }
 ];
 
-const errors = reactive({ nivelAcademico: '', facultad: '', programaAcademico: '' });
-const touched = reactive({ nivelAcademico: false, facultad: false, programaAcademico: false });
+const errors = reactive({ codigo: '', nombre: '', creditos: '', estadoMateria: '' });
+const touched = reactive({ codigo: false, nombre: false, creditos: false, estadoMateria: false });
 
 const rules = {
-    nivelAcademico: [(v) => !!v || 'Requerido.'],
-    facultad: [(v) => !!v || 'Requerido.'],
-    programaAcademico: [(v) => !!v || 'Requerido.']
+    codigo: [(v) => !!String(v ?? '').trim() || 'Requerido.', (v) => String(v ?? '').trim().length <= 50 || 'Máximo 50 caracteres.'],
+    nombre: [(v) => !!String(v ?? '').trim() || 'Requerido.', (v) => String(v ?? '').trim().length <= 255 || 'Máximo 255 caracteres.'],
+    creditos: [(v) => v === null || v === '' || (Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 30) || 'Créditos inválidos (0 a 30).'],
+    estadoMateria: [(v) => !!v || 'Requerido.']
 };
 
 function resetValidation() {
@@ -263,16 +271,17 @@ function showError(f) {
 }
 
 function openNew() {
-    product.value = { id: null, nivelAcademico: 'pregrado', facultad: '', programaAcademico: '' };
+    product.value = { id: null, codigo: '', nombre: '', creditos: null, estadoMateria: 'activa' };
     resetValidation();
     productDialog.value = true;
 }
 function editProduct(row) {
     product.value = {
         id: row.id ?? null,
-        nivelAcademico: row.nivelAcademico ?? row.nivel_academico ?? 'pregrado',
-        facultad: row.facultad ?? '',
-        programaAcademico: row.programaAcademico ?? row.programa_academico ?? ''
+        codigo: row.codigo ?? '',
+        nombre: row.nombre ?? '',
+        creditos: row.creditos ?? null,
+        estadoMateria: row.estadoMateria ?? row.estado_materia ?? 'activa'
     };
     resetValidation();
     productDialog.value = true;
@@ -281,9 +290,11 @@ function editProduct(row) {
 const saving = ref(false);
 
 const SERVER_TO_FORM = {
-    nivel_academico: 'nivelAcademico',
-    facultad: 'facultad',
-    programa_academico: 'programaAcademico'
+    codigo: 'codigo',
+    nombre: 'nombre',
+    creditos: 'creditos',
+    estado_materia: 'estadoMateria',
+    estadoMateria: 'estadoMateria'
 };
 
 function flattenValidationErrors(errs) {
@@ -314,7 +325,7 @@ function applyServerFieldErrors(serverErrors) {
 async function saveProduct() {
     if (saving.value) return;
 
-    const fields = ['nivelAcademico', 'facultad', 'programaAcademico'];
+    const fields = ['codigo', 'nombre', 'creditos', 'estadoMateria'];
     fields.forEach((f) => {
         touched[f] = true;
         validateField(f);
@@ -326,20 +337,23 @@ async function saveProduct() {
         return;
     }
 
-    const payload = {
-        nivel_academico: product.value.nivelAcademico,
-        facultad: product.value.facultad,
-        programa_academico: product.value.programaAcademico
+    const payloadBase = {
+        codigo: String(product.value.codigo || '').trim(),
+        nombre: String(product.value.nombre || '').trim(),
+        creditos: product.value.creditos === '' ? null : (product.value.creditos ?? null),
+        estado_materia: product.value.estadoMateria
     };
+
+    const payload = { ...payloadBase };
 
     try {
         saving.value = true;
 
         if (product.value.id) {
-            await api.patch(`${API_CAT}/${product.value.id}`, payload);
+            await api.patch(`${API_MAT}/${product.value.id}`, payload);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
         } else {
-            await api.post(API_CAT, payload);
+            await api.post(API_MAT, payload);
             toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
         }
 
@@ -378,12 +392,14 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await api.delete(`${API_CAT}/${current.value.id}`);
+        await api.delete(`${API_MAT}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
         await getProducts({ force: true });
     } catch (e) {
-        toast.add({ severity: 'error', summary: 'No se pudo eliminar', detail: String(e?.response?.data?.message || e.message), life: 5000 });
+        const status = e?.response?.status;
+        const msg = e?.response?.data?.message || e.message;
+        toast.add({ severity: status === 409 ? 'warn' : 'error', summary: status === 409 ? 'No se puede eliminar' : 'No se pudo eliminar', detail: `[${status ?? 'ERR'}] ${msg}`, life: 6000 });
     } finally {
         deleteProductDialog.value = false;
         current.value = null;
@@ -398,7 +414,7 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await api.post(`${API_CAT}/bulk-delete`, { ids });
+        await api.post(`${API_MAT}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
         selected.value = [];
@@ -419,7 +435,7 @@ async function bulkDelete() {
 }
 
 // -------------------------
-// BULK JSON Upload (Upsert masivo)
+// BULK JSON Upload
 // -------------------------
 const bulkDialog = ref(false);
 const bulkLoading = ref(false);
@@ -442,8 +458,8 @@ function normText(s) {
 function normLower(s) {
     return normText(s).toLowerCase();
 }
-function makeKey(fac, prog) {
-    return `${normLower(fac)}|${normLower(prog)}`;
+function makeKey(codigo) {
+    return `${normLower(codigo)}`;
 }
 
 function analyzeBulkText(text) {
@@ -460,7 +476,7 @@ function analyzeBulkText(text) {
     let obj;
     try {
         obj = JSON.parse(raw);
-    } catch (e) {
+    } catch {
         bulkError.value = 'El JSON no es válido.';
         return { ok: false, payload: null, reason: 'invalid_json' };
     }
@@ -478,29 +494,43 @@ function analyzeBulkText(text) {
     const normalized = [];
 
     for (const it of items) {
-        const nivel = normLower(it?.nivelAcademico ?? it?.nivel_academico);
-        const fac = normText(it?.facultad);
-        const prog = normText(it?.programaAcademico ?? it?.programa_academico);
+        const codigo = normText(it?.codigo);
+        const nombre = normText(it?.nombre);
+        const creditosRaw = it?.creditos ?? null;
+        const estadoMateria = normLower(it?.estadoMateria ?? it?.estado_materia ?? 'activa');
 
-        const isNivelOk = nivel === 'pregrado' || nivel === 'postgrado';
-        const isFacOk = fac.length > 0;
-        const isProgOk = prog.length > 0;
+        const isCodigoOk = codigo.length > 0 && codigo.length <= 50;
+        const isNombreOk = nombre.length > 0 && nombre.length <= 255;
+        const isEstadoMatOk = estadoMateria === 'activa' || estadoMateria === 'inactiva';
 
-        if (!isNivelOk || !isFacOk || !isProgOk) {
+        let creditos = null;
+        if (creditosRaw !== null && creditosRaw !== '' && creditosRaw !== undefined) {
+            const n = Number(creditosRaw);
+            const okCred = Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 30;
+            if (!okCred) {
+                bulkPreview.invalid += 1;
+                continue;
+            }
+            creditos = n;
+        }
+
+        if (!isCodigoOk || !isNombreOk || !isEstadoMatOk) {
             bulkPreview.invalid += 1;
             continue;
         }
 
-        const k = makeKey(fac, prog);
+        const k = makeKey(codigo);
         if (seen.has(k)) {
             bulkPreview.dupes += 1;
             continue;
         }
         seen.add(k);
+
         normalized.push({
-            nivel_academico: nivel,
-            facultad: fac,
-            programa_academico: prog
+            codigo,
+            nombre,
+            creditos,
+            estado_materia: estadoMateria
         });
         bulkPreview.valid += 1;
     }
@@ -568,21 +598,12 @@ async function submitBulk() {
     try {
         bulkLoading.value = true;
 
-        const { data } = await api.post(API_CAT_BULK, payload);
-        const meta = data?.meta;
-        const created = meta?.created ?? null;
-        const updated = meta?.updated ?? null;
-        const processed = meta?.processed ?? null;
-
-        const msgParts = [];
-        if (processed != null) msgParts.push(`Procesados: ${processed}`);
-        if (created != null) msgParts.push(`Creados: ${created}`);
-        if (updated != null) msgParts.push(`Actualizados: ${updated}`);
+        await api.post(API_MAT_BULK, payload);
 
         toast.add({
             severity: 'success',
             summary: 'Carga masiva OK',
-            detail: msgParts.length ? msgParts.join(' | ') : 'Operación completada.',
+            detail: 'Operación completada.',
             life: 5000
         });
 
@@ -604,7 +625,7 @@ async function submitBulk() {
 }
 
 // -------------------------
-// UX: bloquear space en el form
+// bloquear space en el form
 // -------------------------
 function onFormKeyCapture(e) {
     if (e.key !== ' ') return;
@@ -636,7 +657,7 @@ onMounted(async () => {
     <div class="card">
         <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
-                <h2 class="text-lg font-semibold m-0">Catálogos</h2>
+                <h2 class="text-lg font-semibold m-0">Materias</h2>
             </div>
         </div>
 
@@ -646,9 +667,9 @@ onMounted(async () => {
             <Toolbar class="mb-3">
                 <template #start>
                     <div class="flex items-center gap-2 shrink-0">
-                        <Button v-if="canCreateCatalogos" label="Crear" icon="pi pi-plus" @click="openNew" />
-                        <Button v-if="canCreateCatalogos" label="Cargar JSON" icon="pi pi-upload" severity="secondary" @click="openBulkDialog" />
-                        <Button v-if="canDeleteCatalogos" label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                        <Button v-if="canCreateMaterias" label="Crear" icon="pi pi-plus" @click="openNew" />
+                        <Button v-if="canCreateMaterias" label="Cargar JSON" icon="pi pi-upload" severity="secondary" @click="openBulkDialog" />
+                        <Button v-if="canDeleteMaterias" label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
                     </div>
                 </template>
 
@@ -660,8 +681,8 @@ onMounted(async () => {
                             <IconField class="w-full p-input-icon-left relative">
                                 <InputIcon :class="loading ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
                                 <InputText
-                                    id="catSearch"
-                                    name="catSearch"
+                                    id="matSearch"
+                                    name="matSearch"
                                     v-model.trim="search"
                                     role="searchbox"
                                     placeholder="Escribe para buscar…"
@@ -716,70 +737,76 @@ onMounted(async () => {
                     </template>
                 </Column>
 
-                <Column field="nivelAcademico" header="Nivel" sortable style="width: 10rem; max-width: 10rem">
+                <Column field="codigo" header="Código" sortable headerStyle="width:10rem" style="width: 10rem">
                     <template #body="{ data }">
-                        {{ prettyNivel(data.nivelAcademico ?? data.nivel_academico) }}
-                    </template>
-                </Column>
-
-                <Column field="facultad" header="Facultad" sortable style="min-width: 16rem; max-width: 22rem">
-                    <template #body="{ data }">
-                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.facultad">
-                            {{ data.facultad || '—' }}
+                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.codigo">
+                            {{ data.codigo || '—' }}
                         </span>
                     </template>
                 </Column>
 
-                <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 18rem; max-width: 30rem">
+                <Column field="nombre" header="Nombre" sortable headerStyle="width:32rem" style="width: 32rem">
                     <template #body="{ data }">
-                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical" v-tooltip.top="data.programaAcademico ?? data.programa_academico ?? ''">
-                            {{ data.programaAcademico ?? data.programa_academico ?? '—' }}
+                        <span class="clamp-2" v-tooltip.top="data.nombre ?? ''">
+                            {{ data.nombre || '—' }}
                         </span>
                     </template>
                 </Column>
 
-                <Column field="estado" header="Estado" sortable style="width: 10rem; max-width: 10rem">
+                <Column field="creditos" header="Créditos" sortable headerStyle="width:8rem" style="width: 8rem" class="text-right">
                     <template #body="{ data }">
-                        <Tag :value="estadoLabel(data.estado)" :severity="estadoSeverity(data.estado)" />
+                        {{ data.creditos ?? '—' }}
                     </template>
                 </Column>
 
-                <Column :exportable="false" headerStyle="width:11rem">
+                <Column field="estadoMateria" header="Estado materia" sortable headerStyle="width:12rem" style="width: 12rem">
                     <template #body="{ data }">
-                        <Button v-if="canEditCatalogos" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
-                        <Button v-if="canDeleteCatalogos" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
+                        <Tag :value="prettyEstadoMateria(data.estadoMateria ?? data.estado_materia)" :severity="estadoMateriaSeverity(data.estadoMateria ?? data.estado_materia)" />
+                    </template>
+                </Column>
+
+                <Column :exportable="false" headerStyle="width:11rem" style="width: 11rem">
+                    <template #body="{ data }">
+                        <Button v-if="canEditMaterias" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
+                        <Button v-if="canDeleteMaterias" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
                     </template>
                 </Column>
             </DataTable>
 
             <!-- Crear/Editar -->
-            <Dialog v-model:visible="productDialog" header="Catálogo" :style="{ width: '36rem' }" :modal="true">
+            <Dialog v-model:visible="productDialog" header="Materia" :style="{ width: '36rem' }" :modal="true">
                 <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
                     <div class="flex flex-col gap-2">
-                        <label for="nivelAcademico">Nivel académico</label>
+                        <label for="codigo">Código</label>
+                        <InputText id="codigo" v-model.trim="product.codigo" :invalid="showError('codigo')" @blur="onBlur('codigo')" @keydown.space.stop fluid />
+                        <small v-if="showError('codigo')" class="text-red-500">{{ errors.codigo }}</small>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
+                        <label for="nombre">Nombre</label>
+                        <InputText id="nombre" v-model.trim="product.nombre" :invalid="showError('nombre')" @blur="onBlur('nombre')" fluid />
+                        <small v-if="showError('nombre')" class="text-red-500">{{ errors.nombre }}</small>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
+                        <label for="creditos">Créditos</label>
+                        <InputNumber id="creditos" v-model="product.creditos" :useGrouping="false" :min="0" :max="30" inputClass="w-full" :class="{ 'p-invalid': showError('creditos') }" @blur="onBlur('creditos')" />
+                        <small v-if="showError('creditos')" class="text-red-500">{{ errors.creditos }}</small>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
+                        <label for="estadoMateria">Estado de la materia</label>
                         <Dropdown
-                            id="nivelAcademico"
-                            v-model="product.nivelAcademico"
-                            :options="nivelOptions"
+                            id="estadoMateria"
+                            v-model="product.estadoMateria"
+                            :options="estadoMateriaOptions"
                             optionLabel="label"
                             optionValue="value"
                             placeholder="Selecciona…"
-                            :class="{ 'p-invalid': showError('nivelAcademico') }"
-                            @blur="onBlur('nivelAcademico')"
+                            :class="{ 'p-invalid': showError('estadoMateria') }"
+                            @blur="onBlur('estadoMateria')"
                         />
-                        <small v-if="showError('nivelAcademico')" class="text-red-500">{{ errors.nivelAcademico }}</small>
-                    </div>
-
-                    <div class="flex flex-col gap-2">
-                        <label for="facultad">Facultad</label>
-                        <InputText id="facultad" v-model.trim="product.facultad" :invalid="showError('facultad')" @blur="onBlur('facultad')" @keydown.space.stop fluid />
-                        <small v-if="showError('facultad')" class="text-red-500">{{ errors.facultad }}</small>
-                    </div>
-
-                    <div class="flex flex-col gap-2">
-                        <label for="programaAcademico">Programa académico</label>
-                        <InputText id="programaAcademico" v-model.trim="product.programaAcademico" :invalid="showError('programaAcademico')" @blur="onBlur('programaAcademico')" @keydown.space.stop fluid />
-                        <small v-if="showError('programaAcademico')" class="text-red-500">{{ errors.programaAcademico }}</small>
+                        <small v-if="showError('estadoMateria')" class="text-red-500">{{ errors.estadoMateria }}</small>
                     </div>
                 </div>
 
@@ -790,13 +817,13 @@ onMounted(async () => {
             </Dialog>
 
             <!-- Carga masiva JSON -->
-            <Dialog v-model:visible="bulkDialog" header="Cargar catálogos desde JSON" :style="{ width: '46rem', maxWidth: '95vw' }" :modal="true">
+            <Dialog v-model:visible="bulkDialog" header="Cargar materias desde JSON" :style="{ width: '46rem', maxWidth: '95vw' }" :modal="true">
                 <input ref="bulkFileInput" type="file" accept=".json,.txt,application/json,text/plain" class="hidden" @change="onBulkFileChange" />
 
                 <div class="flex flex-col gap-3">
                     <div class="text-sm text-surface-600">
                         Pega el JSON o sube un archivo. Formato esperado:
-                        <code>{ "items": [ { "nivelAcademico": "pregrado", "facultad": "...", "programaAcademico": "..." } ] }</code>
+                        <code>{ "items": [ { "codigo": "301151", "nombre": "...", "creditos": 3, "estadoMateria": "activa" } ] }</code>
                     </div>
 
                     <div class="flex items-center gap-2">
@@ -848,7 +875,7 @@ onMounted(async () => {
             <!-- Confirmación borrado -->
             <Dialog v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
                 <div>
-                    ¿Seguro que quieres eliminar el catálogo <b>{{ current?.programaAcademico ?? current?.programa_academico }}</b> ({{ current?.facultad }})?
+                    ¿Seguro que quieres eliminar la materia <b>{{ current?.codigo }}</b> — {{ current?.nombre }}?
                 </div>
                 <template #footer>
                     <Button label="No" icon="pi pi-times" text @click="deleteProductDialog = false" />

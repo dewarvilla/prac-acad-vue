@@ -1,12 +1,34 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import { api, ensureCsrf } from '@/api';
+import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 
 const toast = useToast();
 const auth = useAuthStore();
 const hasPerm = (perm) => auth.hasPermission(perm);
+
+// -------------------------
+// Tabla base
+// -------------------------
+const tableUid = `cre-${Math.random().toString(36).slice(2)}`;
+
+const products = ref([]);
+const selected = ref([]);
+const loading = ref(false);
+
+const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
+const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
+function toggleAll(e) {
+    if (e.checked) selected.value = [...products.value];
+    else selected.value = [];
+}
+
+const page = ref(1);
+const rows = ref(10);
+const total = ref(0);
+const sortField = ref('nombrePractica');
+const sortOrder = ref(1);
 
 // -------------------------
 // Permisos de CRUD
@@ -15,6 +37,19 @@ const canViewCreaciones = computed(() => hasPerm('creaciones.view'));
 const canCreateCreaciones = computed(() => hasPerm('creaciones.create'));
 const canEditCreaciones = computed(() => hasPerm('creaciones.edit'));
 const canDeleteCreaciones = computed(() => hasPerm('creaciones.delete'));
+
+// -------------------------
+// Restricción UI: editar/eliminar
+// -------------------------
+const isRejected = (row) => {
+    const st = row?.estado_creacion ?? row?.estadoCreacion ?? row?.estado_creacion ?? row?.estadoCreacion;
+    return String(st || '').toLowerCase() === 'rechazada';
+};
+
+const canEditRow = (row) => canEditCreaciones.value && isRejected(row);
+const canDeleteRow = (row) => canDeleteCreaciones.value && isRejected(row);
+
+const canBulkDelete = computed(() => canDeleteCreaciones.value && selected.value.length > 0 && selected.value.every(isRejected));
 
 // -------------------------
 // Permisos de aprobación
@@ -71,33 +106,17 @@ function getApprovalCurrentRoleKey(row) {
 }
 
 // -------------------------
-// Tabla base
+// Search debounce
 // -------------------------
-const tableUid = `cre-${Math.random().toString(36).slice(2)}`;
-
-const products = ref([]);
-const selected = ref([]);
-const loading = ref(false);
-
-const allSelected = computed(() => selected.value.length > 0 && selected.value.length === products.value.length);
-const someSelected = computed(() => selected.value.length > 0 && selected.value.length < products.value.length);
-function toggleAll(e) {
-    if (e.checked) selected.value = [...products.value];
-    else selected.value = [];
-}
-
-const page = ref(1);
-const rows = ref(10);
-const total = ref(0);
-const sortField = ref('nombrePractica');
-const sortOrder = ref(1);
-
 const search = ref('');
 const DEBOUNCE_MS = 250;
 const MIN_CHARS = 2;
 let typingTimer = null;
 let activeCtrl = null;
 
+// -------------------------
+// IDs únicos form
+// -------------------------
 const uid = Math.random().toString(36).slice(2);
 const recId = `recursosNecesarios-${uid}`;
 const jusId = `justificacion-${uid}`;
@@ -127,7 +146,7 @@ async function fetchProgramas(query = '') {
     loadingProgs.value = true;
     try {
         const { data } = await api.get('/catalogos', { params: { q: query, per_page: 20, page: 1 } });
-        const items = Array.isArray(data) ? data : (data.data ?? []);
+        const items = Array.isArray(data) ? data : (data?.data ?? []);
         progSugs.value = items.map((p) => ({
             id: p.id,
             codigo: p.codigo ?? p.id,
@@ -144,6 +163,7 @@ async function fetchProgramas(query = '') {
 function onProgramaInput() {
     const q = s(programaQuery.value).trim();
     showProgPanel.value = true;
+
     if (product.value.programa && q !== s(product.value.programa?.nombre).trim()) {
         product.value.programa = null;
         if (touched.programa) validateField('programa');
@@ -208,6 +228,180 @@ function clearPrograma() {
 }
 
 // -------------------------
+// Helpers
+// -------------------------
+function estadoLabel(estado) {
+    const s = String(estado ?? '')
+        .trim()
+        .toLowerCase();
+
+    const map = {
+        en_aprobacion: 'En aprobación',
+        aprobada: 'Aprobada',
+        rechazada: 'Rechazada',
+        creada: 'Creada',
+
+        pending: 'En aprobación',
+        approved: 'Aprobada',
+        rejected: 'Rechazada',
+        cancelled: 'Cancelada',
+        cancelada: 'Cancelada'
+    };
+
+    if (map[s]) return map[s];
+    const pretty = s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    return pretty || '—';
+}
+
+function estadoSeverity(estado) {
+    const s = String(estado ?? '')
+        .trim()
+        .toLowerCase();
+
+    if (s === 'aprobada' || s === 'approved') return 'success';
+    if (s === 'rechazada' || s === 'rejected') return 'danger';
+    if (s === 'en_aprobacion' || s === 'pending') return 'warn';
+
+    return 'info';
+}
+
+function materiaRowLabel(row) {
+    const m = row?.materia ?? row?.materia_obj ?? null;
+
+    const codigo = m?.codigo ?? row?.materiaCodigo ?? row?.materia_codigo ?? row?.materia?.codigo ?? null;
+    const nombre = m?.nombre ?? row?.materiaNombre ?? row?.materia_nombre ?? row?.materia?.nombre ?? null;
+
+    if (codigo && nombre) return `${codigo} - ${nombre}`;
+    if (codigo) return String(codigo);
+    if (nombre) return String(nombre);
+
+    const mt = row?.materia_text ?? row?.materiaText ?? '';
+    if (String(mt).trim()) return String(mt).trim();
+
+    return '—';
+}
+
+// -------------------------
+// Materia (Autocomplete)
+// -------------------------
+const materiaQuery = ref('');
+const matSugs = ref([]);
+const loadingMats = ref(false);
+const showMatPanel = ref(false);
+const highlightedMatIndex = ref(-1);
+let matTimer = null;
+const MAT_DEBOUNCE = 250;
+
+function openMatPanel() {
+    showMatPanel.value = true;
+}
+function closeMatPanel() {
+    showMatPanel.value = false;
+    highlightedMatIndex.value = -1;
+}
+
+async function fetchMaterias(query = '') {
+    loadingMats.value = true;
+    try {
+        const { data } = await api.get('/materias', {
+            params: {
+                q: query,
+                per_page: 20,
+                page: 1,
+                sort: 'codigo',
+                estado_materia: 'activa',
+                estado: true
+            }
+        });
+
+        const items = Array.isArray(data) ? data : (data?.data ?? []);
+
+        matSugs.value = items.map((m) => ({
+            id: m.id,
+            codigo: m.codigo ?? '',
+            nombre: m.nombre ?? '',
+            creditos: m.creditos ?? null,
+            label: `${m.codigo ?? ''} - ${m.nombre ?? ''}`.trim()
+        }));
+    } catch (e) {
+        matSugs.value = [];
+        toast.add({ severity: 'error', summary: 'Materias', detail: e?.response?.data?.message || e.message, life: 4000 });
+    } finally {
+        loadingMats.value = false;
+    }
+}
+
+function onMateriaInput() {
+    const q = s(materiaQuery.value).trim();
+    showMatPanel.value = true;
+
+    const currentLabel = s(product.value.materia?.label || '').trim();
+    if (product.value.materia && q !== currentLabel) {
+        product.value.materia = null;
+        if (touched.materia) validateField('materia');
+    }
+
+    if (matTimer) clearTimeout(matTimer);
+    matTimer = setTimeout(() => {
+        if (!q.length) {
+            matSugs.value = [];
+            highlightedMatIndex.value = -1;
+            return;
+        }
+        fetchMaterias(q);
+    }, MAT_DEBOUNCE);
+}
+
+function onMateriaKeydown(e) {
+    if (!showMatPanel.value || !matSugs.value.length) return;
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        highlightedMatIndex.value = highlightedMatIndex.value < matSugs.value.length - 1 ? highlightedMatIndex.value + 1 : 0;
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        highlightedMatIndex.value = highlightedMatIndex.value > 0 ? highlightedMatIndex.value - 1 : matSugs.value.length - 1;
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (highlightedMatIndex.value >= 0) selectMateria(matSugs.value[highlightedMatIndex.value]);
+        else {
+            touched.materia = true;
+            validateField('materia');
+            closeMatPanel();
+        }
+    }
+}
+
+function selectMateria(it) {
+    product.value.materia = it;
+    materiaQuery.value = it.label || it.nombre || '';
+
+    touched.materia = true;
+    validateField('materia');
+
+    closeMatPanel();
+}
+
+function onMateriaEnter() {
+    touched.materia = true;
+    validateField('materia');
+    closeMatPanel();
+}
+
+function clearMateria() {
+    materiaQuery.value = '';
+    matSugs.value = [];
+    highlightedMatIndex.value = -1;
+
+    product.value.materia = null;
+
+    touched.materia = true;
+    validateField('materia');
+
+    closeMatPanel();
+}
+
+// -------------------------
 // Parametrización (sort/search/paginación)
 // -------------------------
 const SORT_MAP_CRE = {
@@ -248,35 +442,94 @@ function buildParams({ force = false } = {}) {
 }
 
 // -------------------------
+// Inbox helpers (ocultar inmediatamente al decidir)
+// -------------------------
+function removeInboxItem(approvalRequestId) {
+    if (!approvalRequestId) return;
+    products.value = products.value.filter((x) => getApprovalRequestId(x) !== approvalRequestId);
+    selected.value = selected.value.filter((x) => getApprovalRequestId(x) !== approvalRequestId);
+    total.value = Number(products.value.length);
+}
+
+function isActionable(row) {
+    const status = row?.approvalStatus ?? row?._approval?.status;
+    const isCurrent = row?.approvalIsCurrent ?? row?._approval?.is_current ?? row?._approval?.isCurrent;
+
+    if (status && String(status).toLowerCase() !== 'pending') return false;
+    if (isCurrent === false) return false;
+
+    return true;
+}
+
+function canApproveRow(row) {
+    if (!isApproverMode.value) return false;
+    if (!currentActorKey.value) return false;
+    if (!canApproveAtStage.value) return false;
+
+    const approvalRequestId = getApprovalRequestId(row);
+    if (!approvalRequestId) return false;
+
+    if (!isActionable(row)) return false;
+
+    const roleKey = getApprovalCurrentRoleKey(row);
+    if (roleKey && roleKey !== currentActorKey.value) return false;
+
+    return true;
+}
+
+function canRejectRow(row) {
+    if (!isApproverMode.value) return false;
+    if (!currentActorKey.value) return false;
+    if (!canRejectAtStage.value) return false;
+
+    const approvalRequestId = getApprovalRequestId(row);
+    if (!approvalRequestId) return false;
+
+    if (!isActionable(row)) return false;
+
+    const roleKey = getApprovalCurrentRoleKey(row);
+    if (roleKey && roleKey !== currentActorKey.value) return false;
+
+    return true;
+}
+
+// -------------------------
 // Normalizador Inbox
 // -------------------------
 function normalizeInboxItem(ar) {
-    const a = ar?.approvable ?? {};
+    const raw = ar?.data ? ar.data : ar;
+
+    const a = raw?.approvable?.data ?? raw?.approvable ?? {};
     const cat = a?.catalogo ?? {};
+    const mat = a?.materia ?? a?.materia_obj ?? {};
 
     return {
         _mode: 'inbox',
-        approvalRequestId: ar?.id ?? null,
-        approvalCurrentRoleKey: ar?.current_role_key ?? ar?.currentRoleKey ?? null,
-        approvalDefinitionCode: ar?.definition?.code ?? ar?.definition_code ?? null,
 
-        // shape tipo CreacionResource
-        id: a?.id ?? ar?.approvable_id ?? ar?.id ?? null,
+        approvalRequestId: raw?.id ?? null,
+        approvalStatus: raw?.status ?? null,
+        approvalIsCurrent: raw?.is_current ?? raw?.isCurrent ?? null,
+        approvalCurrentRoleKey: raw?.current_role_key ?? raw?.currentRoleKey ?? null,
+        approvalDefinitionCode: raw?.definition?.code ?? raw?.definition_code ?? null,
+
+        id: a?.id ?? raw?.approvable_id ?? raw?.id ?? null,
         catalogoId: a?.catalogoId ?? a?.catalogo_id ?? cat?.id ?? null,
+
+        materiaId: a?.materiaId ?? a?.materia_id ?? mat?.id ?? null,
+        materiaCodigo: mat?.codigo ?? a?.materia_codigo ?? null,
+        materiaNombre: mat?.nombre ?? a?.materia_nombre ?? null,
+        materia: mat?.id ? mat : null,
+        materia_text: a?.materia_text ?? a?.materiaText ?? null,
 
         nombrePractica: a?.nombrePractica ?? a?.nombre_practica ?? '',
         programaAcademico: a?.programaAcademico ?? a?.programa_academico ?? cat?.programaAcademico ?? cat?.programa_academico ?? a?.programa_text ?? '',
 
         estadoCreacion: a?.estadoCreacion ?? a?.estado_creacion ?? 'en_aprobacion',
-
         recursosNecesarios: a?.recursosNecesarios ?? a?.recursos_necesarios ?? '',
         justificacion: a?.justificacion ?? '',
 
-        createdAt: a?.createdAt ?? a?.created_at ?? ar?.created_at ?? null,
-        updatedAt: a?.updatedAt ?? a?.updated_at ?? ar?.updated_at ?? null,
-
-        _approval: ar,
-        _approvable: a
+        createdAt: a?.createdAt ?? a?.created_at ?? raw?.created_at ?? null,
+        updatedAt: a?.updatedAt ?? a?.updated_at ?? raw?.updated_at ?? null
     };
 }
 
@@ -310,7 +563,6 @@ async function getProducts(opts = {}) {
             return;
         }
 
-        // Modo aprobador (Inbox)
         const { data } = await api.get(API_INBOX, { params: buildParams({ force }), signal });
 
         const items = Array.isArray(data) ? data : (data.data ?? []);
@@ -346,9 +598,6 @@ async function getProducts(opts = {}) {
     }
 }
 
-// -------------------------
-// Search debounce
-// -------------------------
 function scheduleFetch() {
     const raw = String(search.value || '').trim();
     if (raw.length === 0 || raw.length < MIN_CHARS) return;
@@ -417,33 +666,6 @@ function clearSearch() {
 // -------------------------
 const approveLoading = ref(false);
 
-function canApproveRow(row) {
-    if (!isApproverMode.value) return false;
-    if (!currentActorKey.value) return false;
-    if (!canApproveAtStage.value) return false;
-
-    const approvalRequestId = getApprovalRequestId(row);
-    if (!approvalRequestId) return false;
-
-    const roleKey = getApprovalCurrentRoleKey(row);
-    if (roleKey && roleKey !== currentActorKey.value) return false;
-
-    return true;
-}
-function canRejectRow(row) {
-    if (!isApproverMode.value) return false;
-    if (!currentActorKey.value) return false;
-    if (!canRejectAtStage.value) return false;
-
-    const approvalRequestId = getApprovalRequestId(row);
-    if (!approvalRequestId) return false;
-
-    const roleKey = getApprovalCurrentRoleKey(row);
-    if (roleKey && roleKey !== currentActorKey.value) return false;
-
-    return true;
-}
-
 async function approveRow(row) {
     const approvalRequestId = getApprovalRequestId(row);
     if (!approvalRequestId) {
@@ -453,19 +675,30 @@ async function approveRow(row) {
 
     try {
         approveLoading.value = true;
-        await ensureCsrf();
         const { data } = await api.post(approvalEndpoints.approve(approvalRequestId));
 
-        if (data?.ok !== true) {
+        if (data?.ok === false) {
             toast.add({ severity: 'warn', summary: 'No se pudo aprobar', detail: data?.message || 'Operación rechazada.', life: 5000 });
             return;
         }
 
+        removeInboxItem(approvalRequestId);
         await getProducts({ force: true });
+
         toast.add({ severity: 'success', summary: 'Aprobado', detail: 'Aprobación registrada.', life: 3000 });
     } catch (e) {
         const status = e?.response?.status;
         const msg = e?.response?.data?.message || e.message;
+
+        if (
+            String(msg || '')
+                .toLowerCase()
+                .includes('finalizada')
+        ) {
+            removeInboxItem(approvalRequestId);
+            await getProducts({ force: true });
+        }
+
         toast.add({
             severity: status === 409 ? 'warn' : 'error',
             summary: status === 409 ? 'No se puede aprobar' : 'Error al aprobar',
@@ -500,6 +733,7 @@ function closeRejectDialog() {
     rejectJustificacion.value = '';
     rejectError.value = '';
 }
+
 async function confirmReject() {
     if (!rejectJustificacion.value || rejectJustificacion.value.trim().length < 5) {
         rejectError.value = 'La justificación debe tener mínimo 5 caracteres.';
@@ -510,23 +744,35 @@ async function confirmReject() {
 
     try {
         rejectLoading.value = true;
-        await ensureCsrf();
 
         const { data } = await api.post(approvalEndpoints.reject(target.approvalRequestId), {
             comment: rejectJustificacion.value.trim()
         });
 
-        if (!data?.ok) {
+        if (data?.ok === false) {
             rejectError.value = data?.message || 'Operación rechazada.';
             return;
         }
 
+        removeInboxItem(target.approvalRequestId);
         await getProducts({ force: true });
+
         toast.add({ severity: 'success', summary: 'Rechazado', detail: 'Rechazo registrado.', life: 3000 });
         closeRejectDialog();
     } catch (e) {
         const status = e?.response?.status;
         const msg = e?.response?.data?.message || e.message;
+
+        if (
+            String(msg || '')
+                .toLowerCase()
+                .includes('finalizada')
+        ) {
+            removeInboxItem(target.approvalRequestId);
+            await getProducts({ force: true });
+            closeRejectDialog();
+        }
+
         rejectError.value = `[${status ?? 'ERR'}] ${msg}`;
     } finally {
         rejectLoading.value = false;
@@ -534,8 +780,9 @@ async function confirmReject() {
 }
 
 // -------------------------
-// CRUD (NO aprobador)
+// CRUD (NO aprobador) + Detalles
 // -------------------------
+const productDialog = ref(false);
 const detailsDialog = ref(false);
 const detailsLoading = ref(false);
 const details = ref([]);
@@ -549,11 +796,22 @@ async function openDetails() {
         if (!isApproverMode.value) {
             const reqs = selected.value.map((r) => api.get(`${API_CRE}/${r.id}`));
             const results = await Promise.allSettled(reqs);
-            details.value = results.filter((r) => r.status === 'fulfilled').map((r) => r.value.data?.data ?? r.value.data);
+
+            details.value = results
+                .filter((r) => r.status === 'fulfilled')
+                .map((r) => r.value.data?.data ?? r.value.data)
+                .filter(Boolean);
         } else {
             const reqs = selected.value.map((r) => api.get(`${API_APPROVAL_REQUESTS}/${getApprovalRequestId(r)}`));
             const results = await Promise.allSettled(reqs);
-            details.value = results.filter((r) => r.status === 'fulfilled').map((r) => (r.value.data?.data ?? r.value.data)?.approvable ?? r.value.data?.data ?? r.value.data);
+
+            details.value = results
+                .filter((r) => r.status === 'fulfilled')
+                .map((r) => {
+                    const ar = r.value.data?.data ?? r.value.data;
+                    return ar?.approvable?.data ?? null;
+                })
+                .filter(Boolean);
         }
     } finally {
         detailsDialog.value = true;
@@ -561,12 +819,34 @@ async function openDetails() {
     }
 }
 
-const productDialog = ref(false);
-const product = ref({ id: null, programa: null, nombrePractica: '', recursosNecesarios: '', justificacion: '' });
-const errors = reactive({ programa: '', nombrePractica: '', recursosNecesarios: '', justificacion: '' });
-const touched = reactive({ programa: false, nombrePractica: false, recursosNecesarios: false, justificacion: false });
+const product = ref({
+    id: null,
+    programa: null,
+    materia: null,
+    nombrePractica: '',
+    recursosNecesarios: '',
+    justificacion: ''
+});
+
+const errors = reactive({
+    programa: '',
+    materia: '',
+    nombrePractica: '',
+    recursosNecesarios: '',
+    justificacion: ''
+});
+
+const touched = reactive({
+    programa: false,
+    materia: false,
+    nombrePractica: false,
+    recursosNecesarios: false,
+    justificacion: false
+});
+
 const rules = {
     programa: [(v) => !!v?.id || 'Requerido.'],
+    materia: [(v) => !!v?.id || 'Requerido.'],
     nombrePractica: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
     justificacion: [(v) => !!v || 'Requerido.']
@@ -597,15 +877,35 @@ function showError(f) {
 }
 
 function openNew() {
-    product.value = { id: null, programa: null, nombrePractica: '', recursosNecesarios: '', justificacion: '' };
+    product.value = { id: null, programa: null, materia: null, nombrePractica: '', recursosNecesarios: '', justificacion: '' };
+
     programaQuery.value = '';
     progSugs.value = [];
     closeProgPanel();
+
+    materiaQuery.value = '';
+    matSugs.value = [];
+    closeMatPanel();
+
     resetValidation();
     productDialog.value = true;
 }
 
 function editProduct(row) {
+    const materiaObj = row?.materia?.id
+        ? {
+              id: row.materia.id,
+              codigo: row.materia.codigo ?? '',
+              nombre: row.materia.nombre ?? '',
+              label: `${row.materia.codigo ?? ''} - ${row.materia.nombre ?? ''}`.trim()
+          }
+        : row.materiaId || row.materia_id
+          ? {
+                id: row.materiaId ?? row.materia_id,
+                label: materiaRowLabel(row)
+            }
+          : null;
+
     product.value = {
         id: row.id ?? null,
         programa:
@@ -616,13 +916,20 @@ function editProduct(row) {
                       nombre: row.programaAcademico ?? row.programa_academico ?? ''
                   }
                 : null,
+        materia: materiaObj,
         nombrePractica: row.nombrePractica ?? '',
         recursosNecesarios: row.recursosNecesarios ?? '',
         justificacion: row.justificacion ?? ''
     };
+
     programaQuery.value = product.value.programa ? product.value.programa.nombre : '';
     progSugs.value = [];
     closeProgPanel();
+
+    materiaQuery.value = product.value.materia ? product.value.materia.label || '' : '';
+    matSugs.value = [];
+    closeMatPanel();
+
     resetValidation();
     productDialog.value = true;
 }
@@ -644,6 +951,7 @@ function summarizeValidationErrors(errs) {
 
 const SERVER_TO_FORM = {
     catalogo_id: 'programa',
+    materia_id: 'materia',
     nombre_practica: 'nombrePractica',
     recursos_necesarios: 'recursosNecesarios',
     justificacion: 'justificacion'
@@ -663,47 +971,46 @@ function applyServerFieldErrors(serverErrors) {
     }
 }
 
-async function saveProduct() {
-    if (saving.value) return;
+// -------------------------
+// Confirmación antes de guardar (crear/editar)
+// -------------------------
+const confirmSaveDialog = ref(false);
+const pendingSaveAction = ref(null); // 'create' | 'edit'
+const pendingSavePayload = ref(null);
 
-    const fields = ['programa', 'nombrePractica', 'recursosNecesarios', 'justificacion'];
-    fields.forEach((f) => {
-        touched[f] = true;
-        validateField(f);
-    });
+function openConfirmSave(action, payload) {
+    pendingSaveAction.value = action;
+    pendingSavePayload.value = payload;
+    confirmSaveDialog.value = true;
+}
 
-    const ok = fields.every((f) => !errors[f]);
-    if (!ok) {
-        toast.add({
-            severity: 'warn',
-            summary: 'No se pudo guardar',
-            detail: 'Revisa los campos obligatorios.',
-            life: 4500
-        });
+function closeConfirmSave() {
+    confirmSaveDialog.value = false;
+    pendingSaveAction.value = null;
+    pendingSavePayload.value = null;
+}
+
+async function confirmSave() {
+    const action = pendingSaveAction.value;
+    const payload = pendingSavePayload.value;
+    if (!action || !payload) {
+        closeConfirmSave();
         return;
     }
 
-    const payload = {
-        catalogo_id: product.value.programa?.id ?? null,
-        nombre_practica: product.value.nombrePractica,
-        recursos_necesarios: product.value.recursosNecesarios,
-        justificacion: product.value.justificacion,
-        programa_text: String(programaQuery.value || '').trim()
-    };
-
     try {
         saving.value = true;
-        await ensureCsrf();
 
-        if (product.value.id) {
+        if (action === 'edit') {
             await api.patch(`${API_CRE}/${product.value.id}`, payload);
-            toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
+            toast.add({ severity: 'success', summary: 'Actualizado', detail: 'La práctica fue actualizada y volvió a aprobación.', life: 3500 });
         } else {
             await api.post(API_CRE, payload);
-            toast.add({ severity: 'success', summary: 'Creado', life: 2500 });
+            toast.add({ severity: 'success', summary: 'Creado', detail: 'La práctica fue creada y enviada a aprobación.', life: 3500 });
         }
 
         productDialog.value = false;
+        closeConfirmSave();
         await getProducts({ force: true });
     } catch (e) {
         const status = e?.response?.status;
@@ -713,6 +1020,7 @@ async function saveProduct() {
             applyServerFieldErrors(data?.errors);
             const detail = summarizeValidationErrors(data?.errors) || data?.message || 'Los datos enviados son inválidos.';
             toast.add({ severity: 'warn', summary: 'No se pudo guardar', detail, life: 6500 });
+            closeConfirmSave();
             return;
         }
 
@@ -723,9 +1031,39 @@ async function saveProduct() {
             detail: `[${status ?? 'ERR'}] ${msg}`,
             life: 6500
         });
+        closeConfirmSave();
     } finally {
         saving.value = false;
     }
+}
+
+async function saveProduct() {
+    if (saving.value) return;
+
+    const fields = ['programa', 'materia', 'nombrePractica', 'recursosNecesarios', 'justificacion'];
+    fields.forEach((f) => {
+        touched[f] = true;
+        validateField(f);
+    });
+
+    const ok = fields.every((f) => !errors[f]);
+    if (!ok) {
+        toast.add({ severity: 'warn', summary: 'No se pudo guardar', detail: 'Revisa los campos obligatorios.', life: 4500 });
+        return;
+    }
+
+    const payload = {
+        catalogo_id: product.value.programa?.id ?? null,
+        materia_id: product.value.materia?.id ?? null,
+        nombre_practica: product.value.nombrePractica,
+        recursos_necesarios: product.value.recursosNecesarios,
+        justificacion: product.value.justificacion,
+        programa_text: String(programaQuery.value || '').trim(),
+        materia_text: String(materiaQuery.value || '').trim()
+    };
+
+    const action = product.value.id ? 'edit' : 'create';
+    openConfirmSave(action, payload);
 }
 
 // delete individual + bulk
@@ -738,7 +1076,6 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await ensureCsrf();
         await api.delete(`${API_CRE}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
@@ -753,13 +1090,15 @@ async function deleteProduct() {
 
 const bulkDeleteDialog = ref(false);
 function confirmBulkDelete() {
-    if (!selected.value.length) return;
+    if (!canBulkDelete.value) {
+        toast.add({ severity: 'warn', summary: 'No se puede eliminar', detail: 'Solo puedes eliminar creaciones en estado "rechazada".', life: 4500 });
+        return;
+    }
     bulkDeleteDialog.value = true;
 }
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await ensureCsrf();
         await api.post(`${API_CRE}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
@@ -780,6 +1119,7 @@ async function bulkDelete() {
     }
 }
 
+// bloquear space en el form
 function onFormKeyCapture(e) {
     if (e.key !== ' ') return;
     const t = e.target;
@@ -800,6 +1140,7 @@ onBeforeUnmount(() => {
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) activeCtrl.abort();
     if (progTimer) clearTimeout(progTimer);
+    if (matTimer) clearTimeout(matTimer);
 });
 
 onMounted(async () => {
@@ -823,7 +1164,7 @@ onMounted(async () => {
                 <template #start>
                     <div class="flex items-center gap-2 shrink-0">
                         <Button v-if="!isApproverMode && canCreateCreaciones" label="Crear" icon="pi pi-plus" @click="openNew" />
-                        <Button v-if="!isApproverMode && canDeleteCreaciones" label="Borrar" icon="pi pi-trash" :disabled="!selected.length" @click="confirmBulkDelete" />
+                        <Button v-if="!isApproverMode && canDeleteCreaciones" label="Borrar" icon="pi pi-trash" :disabled="!canBulkDelete" @click="confirmBulkDelete" />
                         <Button label="Detalles" icon="pi pi-list" :disabled="!selected.length" @click="openDetails" />
                     </div>
                 </template>
@@ -871,6 +1212,9 @@ onMounted(async () => {
                 :rowsPerPageOptions="[5, 10, 25, 50]"
                 currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
                 emptyMessage="No hay registros"
+                responsiveLayout="scroll"
+                :scrollable="true"
+                tableStyle="width: 100%; min-width: 1100px;"
             >
                 <Column headerStyle="width:3rem">
                     <template #headercheckbox>
@@ -888,18 +1232,32 @@ onMounted(async () => {
                         <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
                     </template>
                 </Column>
-
-                <Column field="id" header="id" sortable style="min-width: 5rem; width: 5rem" />
-                <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 14rem" />
-                <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem">
+                <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 16rem; max-width: 34rem">
                     <template #body="{ data }">
-                        <span>
+                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.nombrePractica">
+                            {{ data.nombrePractica }}
+                        </span>
+                    </template>
+                </Column>
+                <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem; max-width: 22rem">
+                    <template #body="{ data }">
+                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical">
                             {{ typeof data.programaAcademico === 'string' ? data.programaAcademico : (data.programaAcademico?.label ?? data.programaAcademico?.nombre ?? '') }}
                         </span>
                     </template>
                 </Column>
-
-                <Column field="estadoCreacion" header="Estado de la creación" sortable style="min-width: 10rem" />
+                <Column header="Materia" style="min-width: 16rem; max-width: 26rem">
+                    <template #body="{ data }">
+                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical">
+                            {{ materiaRowLabel(data) }}
+                        </span>
+                    </template>
+                </Column>
+                <Column field="estadoCreacion" header="Estado" sortable style="width: 12rem; max-width: 12rem">
+                    <template #body="{ data }">
+                        <Tag :value="estadoLabel(data.estadoCreacion)" :severity="estadoSeverity(data.estadoCreacion)" />
+                    </template>
+                </Column>
 
                 <Column :exportable="false" headerStyle="width:11rem">
                     <template #body="{ data }">
@@ -911,14 +1269,14 @@ onMounted(async () => {
 
                         <!-- CREADOR: editar/borrar -->
                         <template v-else>
-                            <Button v-if="canEditCreaciones" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
-                            <Button v-if="canDeleteCreaciones" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
+                            <Button v-if="canEditRow(data)" icon="pi pi-pencil" rounded text class="mr-1" @click.stop="editProduct(data)" />
+                            <Button v-if="canDeleteRow(data)" icon="pi pi-trash" rounded text severity="danger" @click.stop="confirmDeleteProduct(data)" />
                         </template>
                     </template>
                 </Column>
             </DataTable>
 
-            <!-- Crear/Editar-->
+            <!-- Crear/Editar -->
             <Dialog v-if="!isApproverMode" v-model:visible="productDialog" header="Creación de práctica" :style="{ width: '36rem' }" :modal="true">
                 <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
                     <div class="flex flex-col gap-2">
@@ -989,6 +1347,69 @@ onMounted(async () => {
                         <small v-if="showError('programa')" class="text-red-500">{{ errors.programa }}</small>
                     </div>
 
+                    <div class="flex flex-col gap-2 relative">
+                        <label for="materia">Materia</label>
+
+                        <IconField class="w-full relative">
+                            <InputIcon :class="loadingMats ? 'pi pi-spinner pi-spin' : 'pi pi-search'" />
+                            <InputText
+                                id="materia"
+                                name="materia"
+                                :invalid="showError('materia')"
+                                :class="{ 'rounded-b-none': showMatPanel }"
+                                v-model.trim="materiaQuery"
+                                placeholder="Escribe para buscar…"
+                                class="w-full h-10 leading-10 pl-9 pr-8"
+                                autocomplete="off"
+                                role="combobox"
+                                aria-autocomplete="list"
+                                :aria-expanded="showMatPanel ? 'true' : 'false'"
+                                :aria-controls="'mat-listbox'"
+                                :aria-activedescendant="highlightedMatIndex >= 0 ? 'mat-opt-' + highlightedMatIndex : undefined"
+                                @focus="openMatPanel"
+                                @input="onMateriaInput"
+                                @blur="onBlur('materia')"
+                                @keydown="onMateriaKeydown"
+                                @keydown.enter.prevent="onMateriaEnter"
+                                @keydown.esc.prevent="closeMatPanel"
+                            />
+                            <span v-if="materiaQuery" class="pi pi-times cursor-pointer absolute right-3 top-1/2 -translate-y-1/2" @click="clearMateria" aria-label="Limpiar filtro de materia" />
+                        </IconField>
+
+                        <div
+                            v-if="showMatPanel && matSugs.length"
+                            id="mat-listbox"
+                            role="listbox"
+                            class="absolute left-0 right-0 top-full -mt-px max-h-72 overflow-auto z-50 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                        >
+                            <div
+                                v-for="(it, i) in matSugs"
+                                :key="it.id"
+                                :id="'mat-opt-' + i"
+                                role="option"
+                                :aria-selected="i === highlightedMatIndex ? 'true' : 'false'"
+                                class="px-3 py-2 cursor-pointer select-none"
+                                :class="i === highlightedMatIndex ? 'bg-primary-50' : ''"
+                                @mouseenter="highlightedMatIndex = i"
+                                @mouseleave="highlightedMatIndex = -1"
+                                @mousedown.prevent
+                                @click="selectMateria(it)"
+                            >
+                                <div class="text-sm font-medium">{{ it.label || it.codigo + ' - ' + it.nombre }}</div>
+                                <div class="text-xs text-surface-500" v-if="it.creditos != null">Créditos: {{ it.creditos }}</div>
+                            </div>
+                        </div>
+
+                        <div
+                            v-else-if="showMatPanel && !loadingMats && materiaQuery && !matSugs.length"
+                            class="absolute left-0 right-0 top-full -mt-px z-50 px-3 py-2 text-sm text-surface-500 border border-surface-300 border-t-0 rounded-b-md rounded-t-none bg-surface-0 shadow-lg"
+                        >
+                            Sin coincidencias
+                        </div>
+
+                        <small v-if="showError('materia')" class="text-red-500">{{ errors.materia }}</small>
+                    </div>
+
                     <div class="flex flex-col gap-2">
                         <label :for="recId">Recursos necesarios</label>
                         <textarea :id="recId" name="recursosNecesarios" v-model.trim="product.recursosNecesarios" class="p-inputtextarea p-inputtext p-component w-full" rows="3" @blur="onBlur('recursosNecesarios')" @keydown.space.stop></textarea>
@@ -1005,6 +1426,30 @@ onMounted(async () => {
                 <template #footer>
                     <Button type="button" label="Guardar" icon="pi pi-check" :loading="saving" :disabled="saving" @click="saveProduct" @keydown="onSaveBtnKeydown" />
                     <Button type="button" label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="productDialog = false" />
+                </template>
+            </Dialog>
+
+            <!-- Confirmación guardar (crear/editar) -->
+            <Dialog v-if="!isApproverMode" v-model:visible="confirmSaveDialog" header="Confirmar" :style="{ width: '30rem' }" :modal="true">
+                <div class="space-y-2">
+                    <p v-if="pendingSaveAction === 'create'">
+                        Vas a <b>solicitar crear</b> esta práctica y se enviará a <b>aprobación</b>.<br />
+                        Una vez enviada, <b>no podrás editarla ni eliminarla</b>. Solo se habilitará nuevamente la edición si en algún paso del flujo la práctica resulta <b>rechazada</b>.
+                    </p>
+                    <p v-else>
+                        Vas a <b>actualizar</b> esta práctica. Al guardar, se enviará nuevamente a <b>aprobación</b>.<br />
+                        Una vez reenviada, <b>no podrás editarla ni eliminarla</b>. Solo se habilitará nuevamente la edición si en algún paso del flujo la práctica resulta <b>rechazada</b>.
+                    </p>
+                    <div class="text-sm text-gray-600">
+                        <div><b>Programa:</b> {{ product?.programa?.nombre || programaQuery || '—' }}</div>
+                        <div><b>Nombre:</b> {{ product?.nombrePractica || '—' }}</div>
+                        <div><b>Materia:</b> {{ product?.materia?.label || materiaQuery || '—' }}</div>
+                    </div>
+                </div>
+
+                <template #footer>
+                    <Button label="Cancelar" icon="pi pi-times" text :disabled="saving" @click="closeConfirmSave" />
+                    <Button :label="pendingSaveAction === 'create' ? 'Crear y enviar' : 'Guardar y reenviar'" icon="pi pi-check" :loading="saving" :disabled="saving" @click="confirmSave" />
                 </template>
             </Dialog>
 
@@ -1039,44 +1484,37 @@ onMounted(async () => {
             </Dialog>
 
             <!-- Detalles -->
-            <Dialog v-model:visible="detailsDialog" header="Detalles" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '42vw', maxWidth: '720px' }">
+            <Dialog v-model:visible="detailsDialog" header="Detalles" :modal="true" :breakpoints="{ '1024px': '60vw', '768px': '75vw', '560px': '92vw' }" :style="{ width: '46vw', maxWidth: '860px' }">
                 <div v-if="detailsLoading" class="p-4">Cargando…</div>
 
                 <div v-else class="p-3 sm:p-4">
-                    <div v-for="d in details" :key="d.id" class="mb-3 border rounded p-3 sm:p-4">
-                        <div class="font-semibold mb-3 break-words">Id: {{ d.id }} — {{ d.nombrePractica }}</div>
-
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <dl class="space-y-2">
-                                <div>
-                                    <dt class="text-sm font-semibold">Nombre Práctica</dt>
-                                    <dd class="break-words">{{ d.nombrePractica }}</dd>
+                    <div v-for="d in details" :key="d.id" class="mb-4 border rounded-lg p-3 sm:p-4">
+                        <!-- HEADER -->
+                        <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-xs text-surface-500 break-words">Id: {{ d.id }}</div>
+                                <div class="text-base font-semibold break-words leading-snug">
+                                    {{ d.nombrePractica }}
                                 </div>
-
-                                <div>
-                                    <dt class="text-sm font-semibold">Programa Académico</dt>
-                                    <dd class="break-words">
-                                        <template v-if="typeof d.programaAcademico === 'string'">{{ d.programaAcademico }}</template>
-                                        <template v-else>{{ d.programaAcademico?.label }}</template>
-                                    </dd>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+                                <Tag :value="estadoLabel(d.estadoCreacion)" :severity="estadoSeverity(d.estadoCreacion)" />
+                                <Tag :value="typeof d.programaAcademico === 'string' ? d.programaAcademico : (d.programaAcademico?.label ?? '')" severity="secondary" />
+                            </div>
+                        </div>
+                        <div class="mt-4 space-y-4">
+                            <div>
+                                <div class="text-sm font-semibold mb-1">Recursos necesarios</div>
+                                <div class="border rounded-md p-2 whitespace-pre-line break-words">
+                                    {{ d.recursosNecesarios || '—' }}
                                 </div>
-
-                                <div>
-                                    <dt class="text-sm font-semibold">Estado creación</dt>
-                                    <dd class="break-words">{{ d.estadoCreacion }}</dd>
+                            </div>
+                            <div>
+                                <div class="text-sm font-semibold mb-1">Justificación</div>
+                                <div class="border rounded-md p-2 whitespace-pre-line break-words">
+                                    {{ d.justificacion || '—' }}
                                 </div>
-                            </dl>
-
-                            <dl class="space-y-2">
-                                <div>
-                                    <dt class="text-sm font-semibold">Recursos necesarios</dt>
-                                    <dd class="whitespace-pre-line break-words">{{ d.recursosNecesarios }}</dd>
-                                </div>
-                                <div>
-                                    <dt class="text-sm font-semibold">Justificación</dt>
-                                    <dd class="whitespace-pre-line break-words">{{ d.justificacion }}</dd>
-                                </div>
-                            </dl>
+                            </div>
                         </div>
                     </div>
                 </div>

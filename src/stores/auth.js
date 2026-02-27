@@ -1,4 +1,4 @@
-import { api, ensureCsrf } from '@/api';
+import { api } from '@/api';
 import { defineStore } from 'pinia';
 
 export const useAuthStore = defineStore('auth', {
@@ -22,8 +22,8 @@ export const useAuthStore = defineStore('auth', {
     actions: {
         loadFromStorage() {
             try {
-                const raw = localStorage.getItem('me');
-                this.me = raw ? JSON.parse(raw) : null;
+                const rawMe = localStorage.getItem('me');
+                this.me = rawMe ? JSON.parse(rawMe) : null;
             } catch {
                 this.me = null;
             }
@@ -31,11 +31,8 @@ export const useAuthStore = defineStore('auth', {
 
         saveToStorage() {
             try {
-                if (this.me) {
-                    localStorage.setItem('me', JSON.stringify(this.me));
-                } else {
-                    localStorage.removeItem('me');
-                }
+                if (this.me) localStorage.setItem('me', JSON.stringify(this.me));
+                else localStorage.removeItem('me');
             } catch {}
         },
 
@@ -44,16 +41,26 @@ export const useAuthStore = defineStore('auth', {
             this.saveToStorage();
         },
 
+        setToken(token) {
+            try {
+                if (token) localStorage.setItem('token', token);
+                else localStorage.removeItem('token');
+            } catch {}
+        },
+
         async login(email, password) {
             this.loading = true;
             this.error = '';
 
             try {
-                await ensureCsrf();
-                await api.post('/login', { email, password });
-                const { data } = await api.get('/me');
-                this.setMe(data);
+                const { data } = await api.post('/login', { email, password });
+
+                this.setToken(data.token);
+
+                const me = await this.fetchMe();
+                return me;
             } catch (e) {
+                this.setToken(null);
                 this.setMe(null);
                 this.error = e?.response?.data?.message || 'Error de autenticación';
                 throw e;
@@ -69,7 +76,9 @@ export const useAuthStore = defineStore('auth', {
             try {
                 const { data } = await api.get('/me');
                 this.setMe(data);
+                return data;
             } catch (e) {
+                this.setToken(null);
                 this.setMe(null);
                 throw e;
             } finally {
@@ -80,16 +89,22 @@ export const useAuthStore = defineStore('auth', {
 
         async logout() {
             try {
-                await ensureCsrf(true);
                 await api.post('/logout');
             } catch {
             } finally {
+                this.setToken(null);
                 this.setMe(null);
             }
         },
 
         async init() {
             this.loadFromStorage();
+
+            const token = localStorage.getItem('token');
+            if (!token) {
+                this.bootstrapped = true;
+                return;
+            }
 
             try {
                 await this.fetchMe();

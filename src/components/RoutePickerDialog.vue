@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, nextTick } from 'vue';
 import { getGoogleMaps } from '@/lib/googleMaps';
-import { api, ensureCsrf } from '@/api';
+import { api } from '@/api';
 
 /* ===== Categorías de vehículo ===== */
 const CATEGORIAS = [
@@ -183,8 +183,6 @@ async function computeRouteBackend() {
     if (!o || state.destino.lat == null) return;
 
     try {
-        await ensureCsrf();
-
         const { data } = await api.post('/compute-route', {
             origin: { lat: o.lat, lng: o.lng },
             dest: { lat: state.destino.lat, lng: state.destino.lng },

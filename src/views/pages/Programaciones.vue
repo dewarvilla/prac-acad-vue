@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, onBeforeUnmount } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import { api, ensureCsrf } from '@/api';
+import { ap } from '@/api';
 import RoutePickerDialog from '@/components/RoutePickerDialog.vue';
 import RouteMiniMap from '@/components/RouteMiniMap.vue';
 import { useAuthStore } from '@/stores/auth';
@@ -140,7 +140,6 @@ async function fetchEstimateForRoute(r, key) {
     routeEstimates[key].loading = true;
     routeEstimates[key].error = null;
     try {
-        await ensureCsrf();
         const { data } = await api.post('/compute-route', { origin: { lat: oLat, lng: oLng }, dest: { lat: dLat, lng: dLng }, mode: 'DRIVE' }, { timeout: 15000 });
 
         const dist = Number(data?.distance_m ?? data?.distance ?? 0) || null;
@@ -767,7 +766,6 @@ async function saveProduct() {
 
     try {
         saving.value = true;
-        await ensureCsrf();
 
         if (product.value.id) {
             // === ACTUALIZAR ===
@@ -884,7 +882,6 @@ async function approveRow(row) {
 
     try {
         approveLoading.value = true;
-        await ensureCsrf();
 
         const { data } = await api.post(endpoints.approve(row.id));
 
@@ -962,8 +959,6 @@ async function confirmReject() {
         rejectLoading.value = true;
         rejectError.value = '';
 
-        await ensureCsrf();
-
         const { data } = await api.post(endpoints.reject(row.id), {
             justificacion: rejectJustificacion.value.trim()
         });
@@ -1001,7 +996,6 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await ensureCsrf();
         await api.delete(`${API_PROG}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
@@ -1023,7 +1017,6 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await ensureCsrf();
         await api.post(`${API_PROG}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));

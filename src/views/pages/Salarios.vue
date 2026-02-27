@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
-import { api, ensureCsrf } from '@/api';
+import { api } from '@/api';
 
 const API = '/salarios';
 const toast = useToast();
@@ -259,8 +259,6 @@ async function saveProduct() {
         return;
     }
     try {
-        await ensureCsrf();
-
         if (product.value.id) {
             await api.patch(`${API}/${product.value.id}`, product.value);
             toast.add({ severity: 'success', summary: 'Actualizado', life: 2500 });
@@ -296,7 +294,6 @@ function confirmDeleteProduct(row) {
 }
 async function deleteProduct() {
     try {
-        await ensureCsrf();
         await api.delete(`${API}/${current.value.id}`);
         products.value = products.value.filter((x) => x.id !== current.value.id);
         toast.add({ severity: 'success', summary: 'Eliminado', life: 2500 });
@@ -325,7 +322,6 @@ function confirmBulkDelete() {
 async function bulkDelete() {
     const ids = selected.value.map((r) => r.id);
     try {
-        await ensureCsrf();
         await api.post(`${API}/bulk-delete`, { ids });
         const set = new Set(ids);
         products.value = products.value.filter((x) => !set.has(x.id));
