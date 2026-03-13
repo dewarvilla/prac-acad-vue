@@ -30,9 +30,9 @@ const router = createRouter({
 
                 { path: 'pages/empty', name: 'empty', component: () => import('@/views/pages/Empty.vue') },
                 { path: 'pages/crud', name: 'crud', component: () => import('@/views/pages/Crud.vue') },
-                { path: 'pages/salarios', name: 'salarios', component: () => import('@/views/pages/Salarios.vue') },
-                { path: 'pages/catalogos', name: 'catalogos', component: () => import('@/views/pages/Catalogos.vue') },
-                { path: 'pages/materias', name: 'materias', component: () => import('@/views/pages/Materias.vue') },
+                { path: 'pages/smmlv', name: 'smmlv', component: () => import('@/views/pages/Smmlv.vue') },
+                { path: 'pages/sedes', name: 'sedes', component: () => import('@/views/pages/Sedes.vue') },
+                { path: 'pages/auxilios', name: 'auxilios', component: () => import('@/views/pages/Auxilios.vue') },
                 { path: 'pages/participantes', name: 'participantes', component: () => import('@/views/pages/Participantes.vue') },
                 { path: 'pages/programaciones', name: 'programaciones', component: () => import('@/views/pages/Programaciones.vue') },
                 { path: 'pages/creaciones', name: 'creaciones', component: () => import('@/views/pages/Creaciones.vue') },

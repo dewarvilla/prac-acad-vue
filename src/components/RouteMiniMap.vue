@@ -24,8 +24,9 @@ async function initMap() {
         mapEl.value.innerHTML = '';
     }
 
-    const o = props.ruta.origen_lat && props.ruta.origen_lng ? { lat: props.ruta.origen_lat, lng: props.ruta.origen_lng } : { lat: 8.75, lng: -75.88 };
-    const d = props.ruta.destino_lat && props.ruta.destino_lng ? { lat: props.ruta.destino_lat, lng: props.ruta.destino_lng } : null;
+    const o = props.ruta.origen_lat != null && props.ruta.origen_lng != null ? { lat: Number(props.ruta.origen_lat), lng: Number(props.ruta.origen_lng) } : { lat: 8.75, lng: -75.88 };
+
+    const d = props.ruta.destino_lat != null && props.ruta.destino_lng != null ? { lat: Number(props.ruta.destino_lat), lng: Number(props.ruta.destino_lng) } : null;
 
     map = new google.maps.Map(mapEl.value, {
         center: o,

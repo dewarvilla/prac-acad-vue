@@ -5,8 +5,6 @@ import { useRouter } from 'vue-router';
 import { useLayout } from '@/layout/composables/layout';
 import AppConfigurator from './AppConfigurator.vue';
 import NotificationsBell from '@/components/NotificationsBell.vue';
-
-import { api } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 
 const { toggleMenu, toggleDarkMode, isDarkTheme } = useLayout();
@@ -85,7 +83,7 @@ const goProfile = () => {
 
             <div class="layout-topbar-menu hidden lg:block">
                 <div class="layout-topbar-menu-content">
-                    <NotificationsBell class="layout-topbar-action" />
+                    <NotificationsBell />
 
                     <div class="relative">
                         <button

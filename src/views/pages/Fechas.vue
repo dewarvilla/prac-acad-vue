@@ -202,14 +202,14 @@ const submitted = ref(false);
 const product = ref({
     id: null,
     periodo: '',
-    fechaAperturaPreg: '',
-    fechaCierreDocentePreg: '',
-    fechaCierreJefeDepart: '',
-    fechaCierreDecano: '',
-    fechaAperturaPostg: '',
-    fechaCierreDocentePostg: '',
-    fechaCierreCoordinadorPostg: '',
-    fechaCierreJefePostg: ''
+    fechaAperturaPreg: null,
+    fechaCierreDocentePreg: null,
+    fechaCierreJefeDepart: null,
+    fechaCierreDecano: null,
+    fechaAperturaPostg: null,
+    fechaCierreDocentePostg: null,
+    fechaCierreCoordinadorPostg: null,
+    fechaCierreJefePostg: null
 });
 
 const errors = reactive({
@@ -298,8 +298,6 @@ function resetValidation() {
     Object.keys(touched).forEach((k) => (touched[k] = false));
 }
 
-const DATE_FIELDS = ['fechaAperturaPreg', 'fechaCierreDocentePreg', 'fechaCierreJefeDepart', 'fechaCierreDecano', 'fechaAperturaPostg', 'fechaCierreDocentePostg', 'fechaCierreCoordinadorPostg', 'fechaCierreJefePostg'];
-
 function toLocalDate(v) {
     if (!v) return null;
     if (v instanceof Date && !isNaN(v.getTime())) return v;
@@ -336,23 +334,41 @@ function openNew() {
 }
 
 function editProduct(row) {
-    product.value = { ...row };
-    DATE_FIELDS.forEach((f) => (product.value[f] = toLocalDate(row[f])));
+    product.value = {
+        id: row.id ?? null,
+        periodo: row.periodo ?? '',
+
+        // PREGRADO
+        fechaAperturaPreg: toLocalDate(row.fechaAperturaPregrado ?? row.fecha_apertura_pregrado),
+        fechaCierreDocentePreg: toLocalDate(row.fechaCierreDocentePregrado ?? row.fecha_cierre_docente_pregrado),
+        fechaCierreJefeDepart: toLocalDate(row.fechaCierreJefeDepartamento ?? row.fecha_cierre_jefe_departamento),
+        fechaCierreDecano: toLocalDate(row.fechaCierreDecano ?? row.fecha_cierre_decano),
+
+        // POSTGRADO
+        fechaAperturaPostg: toLocalDate(row.fechaAperturaPostgrado ?? row.fecha_apertura_postgrado),
+        fechaCierreDocentePostg: toLocalDate(row.fechaCierreDocentePostgrado ?? row.fecha_cierre_docente_postgrado),
+        fechaCierreCoordinadorPostg: toLocalDate(row.fechaCierreCoordinadorPostgrado ?? row.fecha_cierre_coordinador_postgrado),
+        fechaCierreJefePostg: toLocalDate(row.fechaCierreJefePostgrado ?? row.fecha_cierre_jefe_postgrado)
+    };
+
     resetValidation();
     productDialog.value = true;
 }
 
-// Helpers camelCase <-> snake_case
 const FIELD_MAP = {
     periodo: 'periodo',
-    fechaAperturaPreg: 'fecha_apertura_preg',
-    fechaCierreDocentePreg: 'fecha_cierre_docente_preg',
-    fechaCierreJefeDepart: 'fecha_cierre_jefe_depart',
+
+    // PREGRADO
+    fechaAperturaPreg: 'fecha_apertura_pregrado',
+    fechaCierreDocentePreg: 'fecha_cierre_docente_pregrado',
+    fechaCierreJefeDepart: 'fecha_cierre_jefe_departamento',
     fechaCierreDecano: 'fecha_cierre_decano',
-    fechaAperturaPostg: 'fecha_apertura_postg',
-    fechaCierreDocentePostg: 'fecha_cierre_docente_postg',
-    fechaCierreCoordinadorPostg: 'fecha_cierre_coordinador_postg',
-    fechaCierreJefePostg: 'fecha_cierre_jefe_postg'
+
+    // POSTGRADO
+    fechaAperturaPostg: 'fecha_apertura_postgrado',
+    fechaCierreDocentePostg: 'fecha_cierre_docente_postgrado',
+    fechaCierreCoordinadorPostg: 'fecha_cierre_coordinador_postgrado',
+    fechaCierreJefePostg: 'fecha_cierre_jefe_postgrado'
 };
 
 function buildPayload() {
@@ -576,23 +592,22 @@ onBeforeUnmount(() => {
                     </template>
                 </Column>
 
-                <!-- SIN ID (como pediste) -->
                 <Column field="periodo" header="Periodo" sortable style="width: 8rem; max-width: 8rem" />
 
-                <Column field="fechaAperturaPreg" header="Apertura Pregrado" sortable style="width: 12rem; max-width: 12rem">
-                    <template #body="{ data }">{{ ymd(data.fechaAperturaPreg ?? data.fecha_apertura_preg) }}</template>
+                <Column field="fechaAperturaPregrado" header="Apertura Pregrado" sortable style="width: 12rem; max-width: 12rem">
+                    <template #body="{ data }">{{ ymd(data.fechaAperturaPregrado ?? data.fecha_apertura_pregrado) }}</template>
                 </Column>
 
-                <Column field="fechaCierreDocentePreg" header="Cierre Docente (Pregrado)" sortable style="width: 14rem; max-width: 14rem">
-                    <template #body="{ data }">{{ ymd(data.fechaCierreDocentePreg ?? data.fecha_cierre_docente_preg) }}</template>
+                <Column field="fechaCierreDocentePregrado" header="Cierre Docente (Pregrado)" sortable style="width: 14rem; max-width: 14rem">
+                    <template #body="{ data }">{{ ymd(data.fechaCierreDocentePregrado ?? data.fecha_cierre_docente_pregrado) }}</template>
                 </Column>
 
-                <Column field="fechaAperturaPostg" header="Apertura Postgrado" sortable style="width: 12rem; max-width: 12rem">
-                    <template #body="{ data }">{{ ymd(data.fechaAperturaPostg ?? data.fecha_apertura_postg) }}</template>
+                <Column field="fechaAperturaPostgrado" header="Apertura Postgrado" sortable style="width: 12rem; max-width: 12rem">
+                    <template #body="{ data }">{{ ymd(data.fechaAperturaPostgrado ?? data.fecha_apertura_postgrado) }}</template>
                 </Column>
 
-                <Column field="fechaCierreDocentePostg" header="Cierre Docente (Postgrado)" sortable style="width: 14rem; max-width: 14rem">
-                    <template #body="{ data }">{{ ymd(data.fechaCierreDocentePostg ?? data.fecha_cierre_docente_postg) }}</template>
+                <Column field="fechaCierreDocentePostgrado" header="Cierre Docente (Postgrado)" sortable style="width: 14rem; max-width: 14rem">
+                    <template #body="{ data }">{{ ymd(data.fechaCierreDocentePostgrado ?? data.fecha_cierre_docente_postgrado) }}</template>
                 </Column>
 
                 <Column :exportable="false" headerStyle="width:9rem">

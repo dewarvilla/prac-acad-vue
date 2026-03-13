@@ -1,18 +1,28 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { api } from '@/api';
+import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { api } from '@/api';
+import { useNotificationsStore } from '@/stores/notifications';
+
+import Popover from 'primevue/popover';
+import Badge from 'primevue/badge';
+import Button from 'primevue/button';
+import Tag from 'primevue/tag';
+import Divider from 'primevue/divider';
+import ProgressSpinner from 'primevue/progressspinner';
 
 const router = useRouter();
+const op = ref(null);
+
+const notifs = useNotificationsStore();
 
 const items = ref([]);
 const loading = ref(false);
-const unreadCount = ref(0);
 
-let timer = null;
+const unreadCount = computed(() => Number(notifs.unreadCount || 0));
 
 const notifDisplay = computed(() => {
-    const c = Number(unreadCount.value || 0);
+    const c = unreadCount.value;
     if (!c) return '';
     return c > 99 ? '99+' : String(c);
 });
@@ -25,41 +35,6 @@ function normalizeList(data) {
         created_at: n.created_at ?? n.createdAt ?? null,
         read_at: n.read_at ?? n.readAt ?? null
     }));
-}
-
-const APPROVABLE_ROUTE_MAP = {
-    'App\\Models\\Creacion': { name: 'creaciones' },
-    'App\\Models\\Programacion': { name: 'programaciones' }
-};
-
-function normalizeType(t) {
-    return String(t || '').replaceAll('\\\\', '\\');
-}
-
-function resolveNotificationRoute(n) {
-    const d = n?.data ?? {};
-    const approvableType = normalizeType(d.approvable_type);
-    const approvableId = d.approvable_id;
-
-    if (!approvableType || !approvableId) return null;
-
-    const entry = APPROVABLE_ROUTE_MAP[approvableType];
-    if (!entry?.name) return null;
-
-    return {
-        name: entry.name,
-        query: {
-            focus: String(approvableId),
-            approval: d.approval_request_id ? String(d.approval_request_id) : undefined
-        }
-    };
-}
-
-async function fetchUnreadCount() {
-    try {
-        const { data } = await api.get('/notifications/unread-count');
-        unreadCount.value = Number(data?.count ?? data?.unread ?? data?.unread_count ?? 0);
-    } catch {}
 }
 
 async function fetchNotifications({ onlyUnread = true } = {}) {
@@ -78,60 +53,88 @@ async function fetchNotifications({ onlyUnread = true } = {}) {
 }
 
 async function markAllRead() {
-    if (!items.value.length && unreadCount.value === 0) return;
     await api.post('/notifications/read-all');
     items.value = [];
-    unreadCount.value = 0;
+    notifs.unreadCount = 0;
 }
 
-async function markOneRead(n) {
-    await api.post(`/notifications/${n.id}/read`);
-    items.value = items.value.filter((x) => x.id !== n.id);
-    unreadCount.value = Math.max(0, Number(unreadCount.value || 0) - 1);
+function resolveNotificationUrl(n) {
+    return n?.data?.url ?? null;
 }
 
-async function handleClick(n) {
-    const d = n?.data ?? {};
+async function openNotification(n) {
+    const target = resolveNotificationUrl(n);
+    const wasUnread = !n?.read_at;
 
-    const url = d.url;
-    if (url) {
-        if (typeof url === 'string' && url.startsWith('/')) {
-            await router.push(url);
-        } else {
-            window.location.href = url;
+    try {
+        if (wasUnread) {
+            await api.post(`/notifications/${n.id}/read`);
         }
-        await markOneRead(n);
-        return;
-    }
 
-    const route = resolveNotificationRoute(n);
-    if (route) {
-        await router.push(route);
-        await markOneRead(n);
-        return;
-    }
+        items.value = items.value.filter((x) => x.id !== n.id);
 
-    const approvalRequestId = d.approval_request_id;
-    if (approvalRequestId) {
-        await router.push({ name: 'approvalsInbox', query: { focus: String(approvalRequestId) } });
-        await markOneRead(n);
-        return;
-    }
+        if (wasUnread) {
+            notifs.unreadCount = Math.max(0, unreadCount.value - 1);
+        }
 
-    await markOneRead(n);
+        op.value?.hide?.();
+
+        if (target) {
+            await router.push(target);
+        }
+    } catch (e) {
+        console.error('No se pudo abrir la notificación', e);
+    }
 }
 
-async function handleBellClick() {
-    await Promise.all([fetchUnreadCount(), fetchNotifications({ onlyUnread: true })]);
+function onBellBtnClick(e) {
+    op.value?.toggle?.(e);
+    notifs.refreshUnreadCount();
+    fetchNotifications({ onlyUnread: true });
 }
-
-onMounted(async () => {
-    await fetchUnreadCount();
-    await fetchNotifications({ onlyUnread: true });
-    timer = setInterval(fetchUnreadCount, 25000);
-});
-
-onBeforeUnmount(() => {
-    if (timer) clearInterval(timer);
-});
 </script>
+<template>
+    <div class="relative inline-flex">
+        <button type="button" class="layout-topbar-action" aria-label="Notificaciones" @click="onBellBtnClick($event)">
+            <i class="pi pi-bell"></i>
+        </button>
+
+        <span v-if="notifDisplay" class="absolute -top-1 -right-1">
+            <Badge :value="notifDisplay" />
+        </span>
+
+        <Popover ref="op" :style="{ width: '360px', maxWidth: '90vw' }">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="flex items-center gap-2">
+                    <i class="pi pi-bell text-surface-600" />
+                    <div class="font-semibold">Notificaciones</div>
+                    <Tag v-if="unreadCount > 0" :value="`${unreadCount} nuevas`" severity="info" />
+                </div>
+
+                <Button v-if="unreadCount > 0" type="button" label="Marcar todo" icon="pi pi-check" size="small" text @click="markAllRead" />
+            </div>
+
+            <Divider class="my-2" />
+
+            <div v-if="loading" class="flex items-center justify-center py-6">
+                <ProgressSpinner style="width: 28px; height: 28px" strokeWidth="4" />
+            </div>
+
+            <div v-else-if="!items.length" class="py-6 text-center text-surface-600">
+                <div class="text-base font-medium">No tienes notificaciones</div>
+                <div class="text-sm mt-1">Cuando tengas solicitudes o alertas aparecerán aquí.</div>
+            </div>
+
+            <div v-else class="flex flex-col gap-2">
+                <button v-for="n in items" :key="n.id" type="button" class="w-full text-left p-2 rounded border hover:bg-surface-50 transition" @click="openNotification(n)">
+                    <div class="font-medium truncate">
+                        {{ n.data?.title ?? n.data?.asunto ?? 'Notificación' }}
+                    </div>
+                    <div class="text-sm text-surface-600 mt-0.5">
+                        {{ n.data?.message ?? n.data?.mensaje ?? n.data?.body ?? n.data?.descripcion ?? 'Tienes una notificación pendiente.' }}
+                    </div>
+                </button>
+            </div>
+        </Popover>
+    </div>
+</template>

@@ -12,7 +12,6 @@ const hasPerm = (perm) => auth.hasPermission(perm);
 // Tabla base
 // -------------------------
 const tableUid = `cre-${Math.random().toString(36).slice(2)}`;
-
 const products = ref([]);
 const selected = ref([]);
 const loading = ref(false);
@@ -54,8 +53,9 @@ const canBulkDelete = computed(() => canDeleteCreaciones.value && selected.value
 // -------------------------
 // Permisos de aprobación
 // -------------------------
-const CRE_APPROVE_PERMS = ['creaciones.aprobar.comite_acreditacion', 'creaciones.aprobar.consejo_facultad', 'creaciones.aprobar.consejo_academico'];
-const CRE_REJECT_PERMS = ['creaciones.rechazar.comite_acreditacion', 'creaciones.rechazar.consejo_facultad', 'creaciones.rechazar.consejo_academico'];
+const CRE_APPROVE_PERMS = ['approvals.aprobar.comite_acreditacion', 'approvals.aprobar.consejo_facultad', 'approvals.aprobar.consejo_academico'];
+
+const CRE_REJECT_PERMS = ['approvals.rechazar.comite_acreditacion', 'approvals.rechazar.consejo_facultad', 'approvals.rechazar.consejo_academico'];
 
 const isCreacionesApprover = computed(() => [...CRE_APPROVE_PERMS, ...CRE_REJECT_PERMS].some((p) => hasPerm(p)));
 
@@ -63,25 +63,25 @@ const isApproverMode = computed(() => isCreacionesApprover.value);
 const canAccessModule = computed(() => isApproverMode.value || canViewCreaciones.value);
 
 const currentActorKey = computed(() => {
-    if (hasPerm('creaciones.aprobar.comite_acreditacion') || hasPerm('creaciones.rechazar.comite_acreditacion')) return 'comite_acreditacion';
-    if (hasPerm('creaciones.aprobar.consejo_facultad') || hasPerm('creaciones.rechazar.consejo_facultad')) return 'consejo_facultad';
-    if (hasPerm('creaciones.aprobar.consejo_academico') || hasPerm('creaciones.rechazar.consejo_academico')) return 'consejo_academico';
+    if (hasPerm('approvals.aprobar.comite_acreditacion') || hasPerm('approvals.rechazar.comite_acreditacion')) return 'comite_acreditacion';
+    if (hasPerm('approvals.aprobar.consejo_facultad') || hasPerm('approvals.rechazar.consejo_facultad')) return 'consejo_facultad';
+    if (hasPerm('approvals.aprobar.consejo_academico') || hasPerm('approvals.rechazar.consejo_academico')) return 'consejo_academico';
     return null;
 });
 
 const canApproveAtStage = computed(() => {
     const k = currentActorKey.value;
-    if (k === 'comite_acreditacion') return hasPerm('creaciones.aprobar.comite_acreditacion');
-    if (k === 'consejo_facultad') return hasPerm('creaciones.aprobar.consejo_facultad');
-    if (k === 'consejo_academico') return hasPerm('creaciones.aprobar.consejo_academico');
+    if (k === 'comite_acreditacion') return hasPerm('approvals.aprobar.comite_acreditacion');
+    if (k === 'consejo_facultad') return hasPerm('approvals.aprobar.consejo_facultad');
+    if (k === 'consejo_academico') return hasPerm('approvals.aprobar.consejo_academico');
     return false;
 });
 
 const canRejectAtStage = computed(() => {
     const k = currentActorKey.value;
-    if (k === 'comite_acreditacion') return hasPerm('creaciones.rechazar.comite_acreditacion');
-    if (k === 'consejo_facultad') return hasPerm('creaciones.rechazar.consejo_facultad');
-    if (k === 'consejo_academico') return hasPerm('creaciones.rechazar.consejo_academico');
+    if (k === 'comite_acreditacion') return hasPerm('approvals.rechazar.comite_acreditacion');
+    if (k === 'consejo_facultad') return hasPerm('approvals.rechazar.consejo_facultad');
+    if (k === 'consejo_academico') return hasPerm('approvals.rechazar.consejo_academico');
     return false;
 });
 
@@ -91,6 +91,9 @@ const canRejectAtStage = computed(() => {
 const API_CRE = '/creaciones';
 const API_INBOX = '/approvals/inbox';
 const API_APPROVAL_REQUESTS = '/approval-requests';
+
+const API_ACA_PROGRAMAS = '/academusoft/programas_academicos';
+const API_ACA_MATERIAS = '/academusoft/materias';
 
 const approvalEndpoints = {
     approve: (approvalRequestId) => `${API_APPROVAL_REQUESTS}/${approvalRequestId}/approve`,
@@ -122,6 +125,67 @@ const recId = `recursosNecesarios-${uid}`;
 const jusId = `justificacion-${uid}`;
 
 // -------------------------
+// Utils normalización
+// -------------------------
+const s = (v) => (v == null ? '' : String(v));
+
+function getProgramaFromRow(row) {
+    const p = row?.programa ?? row?.programa_obj ?? null;
+
+    const codigoPrograma = p?.codigoPrograma ?? row?.codigoPrograma ?? row?.codigo_programa ?? row?.programaCodigo ?? null;
+
+    const nombrePrograma = p?.nombrePrograma ?? row?.nombrePrograma ?? row?.nombre_programa ?? row?.programaNombre ?? null;
+
+    const codigoFacultad = p?.codigoFacultad ?? row?.codigoFacultad ?? row?.codigo_facultad ?? null;
+
+    const facultad = p?.facultad ?? row?.facultad ?? null;
+
+    const nivelAcademico = p?.nivelAcademico ?? row?.nivelAcademico ?? row?.nivel_academico ?? null;
+
+    if (!codigoPrograma && !nombrePrograma) return null;
+
+    return {
+        codigoPrograma: s(codigoPrograma).trim(),
+        nombrePrograma: s(nombrePrograma).trim(),
+        codigoFacultad: s(codigoFacultad).trim(),
+        facultad: s(facultad).trim(),
+        nivelAcademico: s(nivelAcademico).trim(),
+        label: `${s(codigoPrograma).trim()} - ${s(nombrePrograma).trim()}`.trim()
+    };
+}
+
+function getMateriaFromRow(row) {
+    const m = row?.materia ?? row?.materia_obj ?? null;
+
+    const codigoMateria = m?.codigoMateria ?? row?.codigoMateria ?? row?.codigo_materia ?? row?.materiaCodigo ?? null;
+
+    const nombreMateria = m?.nombreMateria ?? row?.nombreMateria ?? row?.nombre_materia ?? row?.materiaNombre ?? null;
+
+    const codigoPrograma = m?.codigoPrograma ?? row?.codigoPrograma ?? row?.codigo_programa ?? null;
+
+    if (!codigoMateria && !nombreMateria) return null;
+
+    return {
+        codigoPrograma: s(codigoPrograma).trim(),
+        codigoMateria: s(codigoMateria).trim(),
+        nombreMateria: s(nombreMateria).trim(),
+        label: `${s(codigoMateria).trim()} - ${s(nombreMateria).trim()}`.trim()
+    };
+}
+
+function programaRowLabel(row) {
+    const p = getProgramaFromRow(row);
+    if (!p) return '—';
+    return p.label || p.nombrePrograma || p.codigoPrograma || '—';
+}
+
+function materiaRowLabel(row) {
+    const m = getMateriaFromRow(row);
+    if (!m) return '—';
+    return m.label || m.nombreMateria || m.codigoMateria || '—';
+}
+
+// -------------------------
 // Programa (Autocomplete)
 // -------------------------
 const programaQuery = ref('');
@@ -131,8 +195,6 @@ const showProgPanel = ref(false);
 const highlightedIndex = ref(-1);
 let progTimer = null;
 const PROG_DEBOUNCE = 250;
-
-const s = (v) => (v == null ? '' : String(v));
 
 function openProgPanel() {
     showProgPanel.value = true;
@@ -145,13 +207,29 @@ function closeProgPanel() {
 async function fetchProgramas(query = '') {
     loadingProgs.value = true;
     try {
-        const { data } = await api.get('/catalogos', { params: { q: query, per_page: 20, page: 1 } });
-        const items = Array.isArray(data) ? data : (data?.data ?? []);
-        progSugs.value = items.map((p) => ({
-            id: p.id,
-            codigo: p.codigo ?? p.id,
-            nombre: p.programaAcademico ?? p.programa_academico ?? p.nombre ?? p.label ?? ''
-        }));
+        const { data } = await api.get(API_ACA_PROGRAMAS);
+        const items = Array.isArray(data) ? data : (data?.items ?? data?.data ?? []);
+
+        const q = s(query).trim().toLowerCase();
+
+        progSugs.value = items
+            .filter((p) => !!p?.programa_activo)
+            .filter((p) => {
+                if (!q) return true;
+                const name = s(p?.nombre_programa).toLowerCase();
+                const code = s(p?.codigo_programa).toLowerCase();
+                const fac = s(p?.facultad).toLowerCase();
+                return name.includes(q) || code.includes(q) || fac.includes(q);
+            })
+            .slice(0, 20)
+            .map((p) => ({
+                codigoPrograma: s(p?.codigo_programa).trim(),
+                nombrePrograma: s(p?.nombre_programa).trim(),
+                nivelAcademico: s(p?.nivel_academico).trim(),
+                facultad: s(p?.facultad).trim(),
+                codigoFacultad: s(p?.codigo_facultad).trim(),
+                label: `${s(p?.codigo_programa).trim()} - ${s(p?.nombre_programa).trim()}`.trim()
+            }));
     } catch (e) {
         progSugs.value = [];
         toast.add({ severity: 'error', summary: 'Programas', detail: e?.response?.data?.message || e.message, life: 4000 });
@@ -164,9 +242,17 @@ function onProgramaInput() {
     const q = s(programaQuery.value).trim();
     showProgPanel.value = true;
 
-    if (product.value.programa && q !== s(product.value.programa?.nombre).trim()) {
+    const currentLabel = s(product.value.programa?.label || product.value.programa?.nombrePrograma || '').trim();
+    if (product.value.programa && q !== currentLabel) {
         product.value.programa = null;
+
+        product.value.materia = null;
+        materiaQuery.value = '';
+        matSugs.value = [];
+        highlightedMatIndex.value = -1;
+
         if (touched.programa) validateField('programa');
+        if (touched.materia) validateField('materia');
     }
 
     if (progTimer) clearTimeout(progTimer);
@@ -202,10 +288,16 @@ function onProgramaKeydown(e) {
 
 function selectPrograma(it) {
     product.value.programa = it;
-    programaQuery.value = it.nombre;
+    programaQuery.value = it.label || it.nombrePrograma || '';
+
+    product.value.materia = null;
+    materiaQuery.value = '';
+    matSugs.value = [];
+    highlightedMatIndex.value = -1;
 
     touched.programa = true;
     validateField('programa');
+    if (touched.materia) validateField('materia');
 
     closeProgPanel();
 }
@@ -221,17 +313,23 @@ function clearPrograma() {
 
     product.value.programa = null;
 
+    product.value.materia = null;
+    materiaQuery.value = '';
+    matSugs.value = [];
+    highlightedMatIndex.value = -1;
+
     touched.programa = true;
     validateField('programa');
+    if (touched.materia) validateField('materia');
 
     closeProgPanel();
 }
 
 // -------------------------
-// Helpers
+// Helpers estado
 // -------------------------
 function estadoLabel(estado) {
-    const s = String(estado ?? '')
+    const st = String(estado ?? '')
         .trim()
         .toLowerCase();
 
@@ -248,37 +346,21 @@ function estadoLabel(estado) {
         cancelada: 'Cancelada'
     };
 
-    if (map[s]) return map[s];
-    const pretty = s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    if (map[st]) return map[st];
+    const pretty = st.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
     return pretty || '—';
 }
 
 function estadoSeverity(estado) {
-    const s = String(estado ?? '')
+    const st = String(estado ?? '')
         .trim()
         .toLowerCase();
 
-    if (s === 'aprobada' || s === 'approved') return 'success';
-    if (s === 'rechazada' || s === 'rejected') return 'danger';
-    if (s === 'en_aprobacion' || s === 'pending') return 'warn';
+    if (st === 'aprobada' || st === 'approved') return 'success';
+    if (st === 'rechazada' || st === 'rejected') return 'danger';
+    if (st === 'en_aprobacion' || st === 'pending') return 'warn';
 
     return 'info';
-}
-
-function materiaRowLabel(row) {
-    const m = row?.materia ?? row?.materia_obj ?? null;
-
-    const codigo = m?.codigo ?? row?.materiaCodigo ?? row?.materia_codigo ?? row?.materia?.codigo ?? null;
-    const nombre = m?.nombre ?? row?.materiaNombre ?? row?.materia_nombre ?? row?.materia?.nombre ?? null;
-
-    if (codigo && nombre) return `${codigo} - ${nombre}`;
-    if (codigo) return String(codigo);
-    if (nombre) return String(nombre);
-
-    const mt = row?.materia_text ?? row?.materiaText ?? '';
-    if (String(mt).trim()) return String(mt).trim();
-
-    return '—';
 }
 
 // -------------------------
@@ -303,26 +385,35 @@ function closeMatPanel() {
 async function fetchMaterias(query = '') {
     loadingMats.value = true;
     try {
-        const { data } = await api.get('/materias', {
-            params: {
-                q: query,
-                per_page: 20,
-                page: 1,
-                sort: 'codigo',
-                estado_materia: 'activa',
-                estado: true
-            }
-        });
+        const prog = product.value.programa;
+        const codigoPrograma = prog?.codigoPrograma;
 
-        const items = Array.isArray(data) ? data : (data?.data ?? []);
+        if (!codigoPrograma) {
+            matSugs.value = [];
+            return;
+        }
 
-        matSugs.value = items.map((m) => ({
-            id: m.id,
-            codigo: m.codigo ?? '',
-            nombre: m.nombre ?? '',
-            creditos: m.creditos ?? null,
-            label: `${m.codigo ?? ''} - ${m.nombre ?? ''}`.trim()
-        }));
+        const { data } = await api.get(API_ACA_MATERIAS, { params: { codigo_programa: codigoPrograma } });
+        const items = Array.isArray(data) ? data : (data?.items ?? data?.data ?? []);
+
+        const q = s(query).trim().toLowerCase();
+
+        matSugs.value = items
+            .filter((m) => !!m?.materia_activa)
+            .filter((m) => !m?.codigo_programa || s(m.codigo_programa) === s(codigoPrograma))
+            .filter((m) => {
+                if (!q) return true;
+                const name = s(m?.nombre_materia).toLowerCase();
+                const code = s(m?.codigo_materia).toLowerCase();
+                return name.includes(q) || code.includes(q);
+            })
+            .slice(0, 20)
+            .map((m) => ({
+                codigoPrograma: s(m?.codigo_programa || codigoPrograma).trim(),
+                codigoMateria: s(m?.codigo_materia).trim(),
+                nombreMateria: s(m?.nombre_materia).trim(),
+                label: `${s(m?.codigo_materia).trim()} - ${s(m?.nombre_materia).trim()}`.trim()
+            }));
     } catch (e) {
         matSugs.value = [];
         toast.add({ severity: 'error', summary: 'Materias', detail: e?.response?.data?.message || e.message, life: 4000 });
@@ -334,6 +425,12 @@ async function fetchMaterias(query = '') {
 function onMateriaInput() {
     const q = s(materiaQuery.value).trim();
     showMatPanel.value = true;
+
+    if (!product.value.programa?.codigoPrograma) {
+        matSugs.value = [];
+        highlightedMatIndex.value = -1;
+        return;
+    }
 
     const currentLabel = s(product.value.materia?.label || '').trim();
     if (product.value.materia && q !== currentLabel) {
@@ -374,7 +471,7 @@ function onMateriaKeydown(e) {
 
 function selectMateria(it) {
     product.value.materia = it;
-    materiaQuery.value = it.label || it.nombre || '';
+    materiaQuery.value = it.label || it.nombreMateria || '';
 
     touched.materia = true;
     validateField('materia');
@@ -406,10 +503,12 @@ function clearMateria() {
 // -------------------------
 const SORT_MAP_CRE = {
     id: 'id',
-    catalogoId: 'catalogo_id',
     nombrePractica: 'nombre_practica',
     estadoCreacion: 'estado_creacion',
     estado: 'estado',
+    codigoFacultad: 'codigo_facultad',
+    codigoPrograma: 'codigo_programa',
+    codigoMateria: 'codigo_materia',
     createdAt: 'created_at',
     updatedAt: 'updated_at'
 };
@@ -425,6 +524,52 @@ function mapSort(uiField, order, map) {
     const apiField = map[uiField];
     if (!apiField) return undefined;
     return `${order === -1 ? '-' : ''}${apiField}`;
+}
+
+function compareValues(a, b, order = 1) {
+    const av = a == null ? '' : String(a).toLowerCase();
+    const bv = b == null ? '' : String(b).toLowerCase();
+
+    if (av < bv) return -1 * order;
+    if (av > bv) return 1 * order;
+    return 0;
+}
+
+function sortInboxItems(items) {
+    const field = sortField.value;
+    const order = sortOrder.value === -1 ? -1 : 1;
+
+    const sorted = [...items];
+
+    sorted.sort((a, b) => {
+        switch (field) {
+            case 'nombrePractica':
+                return compareValues(a.nombrePractica ?? a.nombre_practica, b.nombrePractica ?? b.nombre_practica, order);
+
+            case 'codigoPrograma':
+                return compareValues(a.codigoPrograma, b.codigoPrograma, order);
+
+            case 'codigoMateria':
+                return compareValues(a.codigoMateria, b.codigoMateria, order);
+
+            case 'estadoCreacion':
+                return compareValues(a.estadoCreacion ?? a.estado_creacion, b.estadoCreacion ?? b.estado_creacion, order);
+
+            case 'id':
+                return compareValues(a.id, b.id, order);
+
+            case 'createdAt':
+                return compareValues(a.createdAt ?? a.created_at, b.createdAt ?? b.created_at, order);
+
+            case 'updatedAt':
+                return compareValues(a.updatedAt ?? a.updated_at, b.updatedAt ?? b.updated_at, order);
+
+            default:
+                return 0;
+        }
+    });
+
+    return sorted;
 }
 
 const sortParamCre = computed(() => mapSort(sortField.value, sortOrder.value, SORT_MAP_CRE));
@@ -494,14 +639,14 @@ function canRejectRow(row) {
 }
 
 // -------------------------
-// Normalizador Inbox
+// Normalizador Inbox (nuevo esquema Creación)
 // -------------------------
 function normalizeInboxItem(ar) {
     const raw = ar?.data ? ar.data : ar;
-
     const a = raw?.approvable?.data ?? raw?.approvable ?? {};
-    const cat = a?.catalogo ?? {};
-    const mat = a?.materia ?? a?.materia_obj ?? {};
+
+    const programa = a?.programa ?? null;
+    const materia = a?.materia ?? null;
 
     return {
         _mode: 'inbox',
@@ -513,20 +658,22 @@ function normalizeInboxItem(ar) {
         approvalDefinitionCode: raw?.definition?.code ?? raw?.definition_code ?? null,
 
         id: a?.id ?? raw?.approvable_id ?? raw?.id ?? null,
-        catalogoId: a?.catalogoId ?? a?.catalogo_id ?? cat?.id ?? null,
 
-        materiaId: a?.materiaId ?? a?.materia_id ?? mat?.id ?? null,
-        materiaCodigo: mat?.codigo ?? a?.materia_codigo ?? null,
-        materiaNombre: mat?.nombre ?? a?.materia_nombre ?? null,
-        materia: mat?.id ? mat : null,
-        materia_text: a?.materia_text ?? a?.materiaText ?? null,
+        programa,
+        materia,
+
+        codigoPrograma: programa?.codigoPrograma ?? a?.codigoPrograma ?? a?.codigo_programa ?? null,
+        codigoMateria: materia?.codigoMateria ?? a?.codigoMateria ?? a?.codigo_materia ?? null,
 
         nombrePractica: a?.nombrePractica ?? a?.nombre_practica ?? '',
-        programaAcademico: a?.programaAcademico ?? a?.programa_academico ?? cat?.programaAcademico ?? cat?.programa_academico ?? a?.programa_text ?? '',
-
         estadoCreacion: a?.estadoCreacion ?? a?.estado_creacion ?? 'en_aprobacion',
         recursosNecesarios: a?.recursosNecesarios ?? a?.recursos_necesarios ?? '',
         justificacion: a?.justificacion ?? '',
+
+        comentarioRechazo: a?.comentarioRechazo ?? a?.comentario_rechazo ?? '',
+        rolRechazo: a?.rolRechazo ?? a?.rol_rechazo ?? '',
+        rolRechazoLabel: a?.rolRechazoLabel ?? a?.rol_rechazo_label ?? '',
+        fechaRechazo: a?.fechaRechazo ?? a?.fecha_rechazo ?? null,
 
         createdAt: a?.createdAt ?? a?.created_at ?? raw?.created_at ?? null,
         updatedAt: a?.updatedAt ?? a?.updated_at ?? raw?.updated_at ?? null
@@ -577,8 +724,10 @@ async function getProducts(opts = {}) {
             });
         }
 
-        products.value = onlyCreaciones;
-        total.value = onlyCreaciones.length;
+        const sortedInbox = sortInboxItems(onlyCreaciones);
+
+        products.value = sortedInbox;
+        total.value = sortedInbox.length;
 
         if (!Array.isArray(data)) {
             if (data.meta?.current_page) page.value = Number(data.meta.current_page);
@@ -825,7 +974,9 @@ const product = ref({
     materia: null,
     nombrePractica: '',
     recursosNecesarios: '',
-    justificacion: ''
+    justificacion: '',
+    comentarioRechazo: '',
+    rolRechazoLabel: ''
 });
 
 const errors = reactive({
@@ -845,8 +996,8 @@ const touched = reactive({
 });
 
 const rules = {
-    programa: [(v) => !!v?.id || 'Requerido.'],
-    materia: [(v) => !!v?.id || 'Requerido.'],
+    programa: [(v) => !!v?.codigoPrograma || 'Requerido.'],
+    materia: [(v) => !!v?.codigoMateria || 'Requerido.'],
     nombrePractica: [(v) => !!v || 'Requerido.'],
     recursosNecesarios: [(v) => !!v || 'Requerido.'],
     justificacion: [(v) => !!v || 'Requerido.']
@@ -877,7 +1028,16 @@ function showError(f) {
 }
 
 function openNew() {
-    product.value = { id: null, programa: null, materia: null, nombrePractica: '', recursosNecesarios: '', justificacion: '' };
+    product.value = {
+        id: null,
+        programa: null,
+        materia: null,
+        nombrePractica: '',
+        recursosNecesarios: '',
+        justificacion: '',
+        comentarioRechazo: '',
+        rolRechazoLabel: ''
+    };
 
     programaQuery.value = '';
     progSugs.value = [];
@@ -892,41 +1052,25 @@ function openNew() {
 }
 
 function editProduct(row) {
-    const materiaObj = row?.materia?.id
-        ? {
-              id: row.materia.id,
-              codigo: row.materia.codigo ?? '',
-              nombre: row.materia.nombre ?? '',
-              label: `${row.materia.codigo ?? ''} - ${row.materia.nombre ?? ''}`.trim()
-          }
-        : row.materiaId || row.materia_id
-          ? {
-                id: row.materiaId ?? row.materia_id,
-                label: materiaRowLabel(row)
-            }
-          : null;
+    const prog = getProgramaFromRow(row);
+    const mat = getMateriaFromRow(row);
 
     product.value = {
         id: row.id ?? null,
-        programa:
-            row.catalogoId || row.catalogo_id
-                ? {
-                      id: row.catalogoId ?? row.catalogo_id,
-                      codigo: row.codigo ?? row.catalogo_id,
-                      nombre: row.programaAcademico ?? row.programa_academico ?? ''
-                  }
-                : null,
-        materia: materiaObj,
-        nombrePractica: row.nombrePractica ?? '',
-        recursosNecesarios: row.recursosNecesarios ?? '',
-        justificacion: row.justificacion ?? ''
+        programa: prog,
+        materia: mat,
+        nombrePractica: row.nombrePractica ?? row.nombre_practica ?? '',
+        recursosNecesarios: row.recursosNecesarios ?? row.recursos_necesarios ?? '',
+        justificacion: row.justificacion ?? '',
+        comentarioRechazo: row.comentarioRechazo ?? row.comentario_rechazo ?? '',
+        rolRechazoLabel: row.rolRechazoLabel ?? row.rol_rechazo_label ?? ''
     };
 
-    programaQuery.value = product.value.programa ? product.value.programa.nombre : '';
+    programaQuery.value = prog ? prog.label || prog.nombrePrograma || '' : '';
     progSugs.value = [];
     closeProgPanel();
 
-    materiaQuery.value = product.value.materia ? product.value.materia.label || '' : '';
+    materiaQuery.value = mat ? mat.label || mat.nombreMateria || '' : '';
     matSugs.value = [];
     closeMatPanel();
 
@@ -950,8 +1094,8 @@ function summarizeValidationErrors(errs) {
 }
 
 const SERVER_TO_FORM = {
-    catalogo_id: 'programa',
-    materia_id: 'materia',
+    codigo_programa: 'programa',
+    codigo_materia: 'materia',
     nombre_practica: 'nombrePractica',
     recursos_necesarios: 'recursosNecesarios',
     justificacion: 'justificacion'
@@ -1053,13 +1197,11 @@ async function saveProduct() {
     }
 
     const payload = {
-        catalogo_id: product.value.programa?.id ?? null,
-        materia_id: product.value.materia?.id ?? null,
+        codigo_programa: product.value.programa?.codigoPrograma ?? null,
+        codigo_materia: product.value.materia?.codigoMateria ?? null,
         nombre_practica: product.value.nombrePractica,
         recursos_necesarios: product.value.recursosNecesarios,
-        justificacion: product.value.justificacion,
-        programa_text: String(programaQuery.value || '').trim(),
-        materia_text: String(materiaQuery.value || '').trim()
+        justificacion: product.value.justificacion
     };
 
     const action = product.value.id ? 'edit' : 'create';
@@ -1209,12 +1351,12 @@ onMounted(async () => {
                 :sortOrder="sortOrder"
                 @page="onPage"
                 @sort="onSort"
-                :rowsPerPageOptions="[5, 10, 25, 50]"
+                :rowsPerPageOptions="[5, 10, 25, 50, 100]"
                 currentPageReportTemplate="Mostrando desde {first} hasta {last} de {totalRecords}"
                 emptyMessage="No hay registros"
                 responsiveLayout="scroll"
                 :scrollable="true"
-                tableStyle="width: 100%; min-width: 1100px;"
+                tableStyle="width: 100%; min-width: 1150px;"
             >
                 <Column headerStyle="width:3rem">
                     <template #headercheckbox>
@@ -1232,30 +1374,34 @@ onMounted(async () => {
                         <Checkbox v-model="selected" :value="data" :inputId="`${tableUid}-row-${index + 1}`" name="row-select" :aria-label="`Seleccionar fila ${index + 1}`" />
                     </template>
                 </Column>
+
                 <Column field="nombrePractica" header="Nombre práctica" sortable style="min-width: 16rem; max-width: 34rem">
                     <template #body="{ data }">
-                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.nombrePractica">
-                            {{ data.nombrePractica }}
+                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.nombrePractica ?? data.nombre_practica">
+                            {{ data.nombrePractica ?? data.nombre_practica }}
                         </span>
                     </template>
                 </Column>
-                <Column field="programaAcademico" header="Programa académico" sortable style="min-width: 16rem; max-width: 22rem">
+
+                <Column field="codigoPrograma" header="Programa académico" sortable style="min-width: 18rem; max-width: 28rem">
                     <template #body="{ data }">
-                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical">
-                            {{ typeof data.programaAcademico === 'string' ? data.programaAcademico : (data.programaAcademico?.label ?? data.programaAcademico?.nombre ?? '') }}
+                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical" v-tooltip.top="programaRowLabel(data)">
+                            {{ programaRowLabel(data) }}
                         </span>
                     </template>
                 </Column>
-                <Column header="Materia" style="min-width: 16rem; max-width: 26rem">
+
+                <Column field="codigoMateria" header="Materia" sortable style="min-width: 18rem; max-width: 30rem">
                     <template #body="{ data }">
-                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical">
+                        <span class="block overflow-hidden" style="-webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical" v-tooltip.top="materiaRowLabel(data)">
                             {{ materiaRowLabel(data) }}
                         </span>
                     </template>
                 </Column>
+
                 <Column field="estadoCreacion" header="Estado" sortable style="width: 12rem; max-width: 12rem">
                     <template #body="{ data }">
-                        <Tag :value="estadoLabel(data.estadoCreacion)" :severity="estadoSeverity(data.estadoCreacion)" />
+                        <Tag :value="estadoLabel(data.estadoCreacion ?? data.estado_creacion)" :severity="estadoSeverity(data.estadoCreacion ?? data.estado_creacion)" />
                     </template>
                 </Column>
 
@@ -1279,6 +1425,13 @@ onMounted(async () => {
             <!-- Crear/Editar -->
             <Dialog v-if="!isApproverMode" v-model:visible="productDialog" header="Creación de práctica" :style="{ width: '36rem' }" :modal="true">
                 <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
+                    <div v-if="product.comentarioRechazo" class="p-3 rounded border border-red-200 bg-red-50">
+                        <div class="font-semibold text-red-700 mb-1">Motivo del rechazo</div>
+                        <div class="text-sm text-red-700 whitespace-pre-line">
+                            {{ product.comentarioRechazo }}
+                        </div>
+                        <div v-if="product.rolRechazoLabel" class="text-xs text-surface-500 mt-2">Rechazado por: {{ product.rolRechazoLabel }}</div>
+                    </div>
                     <div class="flex flex-col gap-2">
                         <label for="nombrePractica">Nombre práctica</label>
                         <InputText id="nombrePractica" name="nombrePractica" v-model.trim="product.nombrePractica" :invalid="showError('nombrePractica')" @blur="onBlur('nombrePractica')" @keydown.space.stop fluid />
@@ -1322,7 +1475,7 @@ onMounted(async () => {
                         >
                             <div
                                 v-for="(it, i) in progSugs"
-                                :key="it.id"
+                                :key="it.codigoPrograma"
                                 :id="'prog-opt-' + i"
                                 role="option"
                                 :aria-selected="i === highlightedIndex ? 'true' : 'false'"
@@ -1333,7 +1486,8 @@ onMounted(async () => {
                                 @mousedown.prevent
                                 @click="selectPrograma(it)"
                             >
-                                <div class="text-sm font-medium">{{ it.nombre }}</div>
+                                <div class="text-sm font-medium">{{ it.label || it.nombrePrograma }}</div>
+                                <div class="text-xs text-surface-500" v-if="it.facultad">Facultad: {{ it.facultad }}</div>
                             </div>
                         </div>
 
@@ -1355,6 +1509,7 @@ onMounted(async () => {
                             <InputText
                                 id="materia"
                                 name="materia"
+                                :disabled="!product.programa"
                                 :invalid="showError('materia')"
                                 :class="{ 'rounded-b-none': showMatPanel }"
                                 v-model.trim="materiaQuery"
@@ -1376,6 +1531,8 @@ onMounted(async () => {
                             <span v-if="materiaQuery" class="pi pi-times cursor-pointer absolute right-3 top-1/2 -translate-y-1/2" @click="clearMateria" aria-label="Limpiar filtro de materia" />
                         </IconField>
 
+                        <small v-if="!product.programa" class="text-xs text-surface-500">Selecciona primero un programa académico.</small>
+
                         <div
                             v-if="showMatPanel && matSugs.length"
                             id="mat-listbox"
@@ -1384,7 +1541,7 @@ onMounted(async () => {
                         >
                             <div
                                 v-for="(it, i) in matSugs"
-                                :key="it.id"
+                                :key="it.codigoMateria"
                                 :id="'mat-opt-' + i"
                                 role="option"
                                 :aria-selected="i === highlightedMatIndex ? 'true' : 'false'"
@@ -1395,8 +1552,7 @@ onMounted(async () => {
                                 @mousedown.prevent
                                 @click="selectMateria(it)"
                             >
-                                <div class="text-sm font-medium">{{ it.label || it.codigo + ' - ' + it.nombre }}</div>
-                                <div class="text-xs text-surface-500" v-if="it.creditos != null">Créditos: {{ it.creditos }}</div>
+                                <div class="text-sm font-medium">{{ it.label || it.codigoMateria + ' - ' + it.nombreMateria }}</div>
                             </div>
                         </div>
 
@@ -1441,7 +1597,7 @@ onMounted(async () => {
                         Una vez reenviada, <b>no podrás editarla ni eliminarla</b>. Solo se habilitará nuevamente la edición si en algún paso del flujo la práctica resulta <b>rechazada</b>.
                     </p>
                     <div class="text-sm text-gray-600">
-                        <div><b>Programa:</b> {{ product?.programa?.nombre || programaQuery || '—' }}</div>
+                        <div><b>Programa:</b> {{ product?.programa?.label || programaQuery || '—' }}</div>
                         <div><b>Nombre:</b> {{ product?.nombrePractica || '—' }}</div>
                         <div><b>Materia:</b> {{ product?.materia?.label || materiaQuery || '—' }}</div>
                     </div>
@@ -1456,7 +1612,7 @@ onMounted(async () => {
             <!-- Confirmación borrado -->
             <Dialog v-if="!isApproverMode" v-model:visible="deleteProductDialog" header="Confirmar" :style="{ width: '28rem' }" :modal="true">
                 <div>
-                    ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.nombrePractica }}</b
+                    ¿Seguro que quieres eliminar la creación <b>Id:{{ current?.id }}</b> — <b>{{ current?.nombrePractica ?? current?.nombre_practica }}</b
                     >?
                 </div>
                 <template #footer>
@@ -1469,7 +1625,7 @@ onMounted(async () => {
             <Dialog v-model:visible="rejectDialog" header="Rechazar creación" :style="{ width: '30rem' }" :modal="true">
                 <div v-if="rejectTarget">
                     <p class="mb-3">
-                        Vas a rechazar la creación <b>Id: {{ rejectTarget.row.id }}</b> — <b>{{ rejectTarget.row.nombrePractica }}</b>
+                        Vas a rechazar la creación <b>Id: {{ rejectTarget.row.id }}</b> — <b>{{ rejectTarget.row.nombrePractica ?? rejectTarget.row.nombre_practica }}</b>
                     </p>
                     <div class="flex flex-col gap-2">
                         <label for="reject-just" class="font-medium">Comentario / Justificación</label>
@@ -1489,30 +1645,38 @@ onMounted(async () => {
 
                 <div v-else class="p-3 sm:p-4">
                     <div v-for="d in details" :key="d.id" class="mb-4 border rounded-lg p-3 sm:p-4">
-                        <!-- HEADER -->
                         <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                             <div class="min-w-0">
                                 <div class="text-xs text-surface-500 break-words">Id: {{ d.id }}</div>
                                 <div class="text-base font-semibold break-words leading-snug">
-                                    {{ d.nombrePractica }}
+                                    {{ d.nombrePractica ?? d.nombre_practica }}
                                 </div>
                             </div>
                             <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-                                <Tag :value="estadoLabel(d.estadoCreacion)" :severity="estadoSeverity(d.estadoCreacion)" />
-                                <Tag :value="typeof d.programaAcademico === 'string' ? d.programaAcademico : (d.programaAcademico?.label ?? '')" severity="secondary" />
+                                <Tag :value="estadoLabel(d.estadoCreacion ?? d.estado_creacion)" :severity="estadoSeverity(d.estadoCreacion ?? d.estado_creacion)" />
+                                <Tag :value="programaRowLabel(d)" severity="secondary" />
+                                <Tag :value="materiaRowLabel(d)" severity="secondary" />
                             </div>
                         </div>
+                        <div v-if="d.comentarioRechazo ?? d.comentario_rechazo" class="mt-4">
+                            <div class="text-sm font-semibold mb-1 text-red-600">Observación del rechazo</div>
+                            <div class="border rounded-md p-2 whitespace-pre-line break-words bg-red-50 border-red-200 text-red-700">
+                                {{ d.comentarioRechazo ?? d.comentario_rechazo }}
+                            </div>
+                            <div v-if="d.rolRechazoLabel ?? d.rol_rechazo_label" class="text-xs text-surface-500 mt-2">Rechazado por: {{ d.rolRechazoLabel ?? d.rol_rechazo_label }}</div>
+                        </div>
+
                         <div class="mt-4 space-y-4">
                             <div>
                                 <div class="text-sm font-semibold mb-1">Recursos necesarios</div>
                                 <div class="border rounded-md p-2 whitespace-pre-line break-words">
-                                    {{ d.recursosNecesarios || '—' }}
+                                    {{ d.recursosNecesarios ?? d.recursos_necesarios ?? '—' }}
                                 </div>
                             </div>
                             <div>
                                 <div class="text-sm font-semibold mb-1">Justificación</div>
                                 <div class="border rounded-md p-2 whitespace-pre-line break-words">
-                                    {{ d.justificacion || '—' }}
+                                    {{ d.justificacion ?? '—' }}
                                 </div>
                             </div>
                         </div>

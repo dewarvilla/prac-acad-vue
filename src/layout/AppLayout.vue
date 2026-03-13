@@ -1,11 +1,21 @@
 <script setup>
 import { useLayout } from '@/layout/composables/layout';
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { useNotificationsStore } from '@/stores/notifications';
+
 import AppFooter from './AppFooter.vue';
 import AppSidebar from './AppSidebar.vue';
 import AppTopbar from './AppTopbar.vue';
 
 const { layoutConfig, layoutState, isSidebarActive } = useLayout();
+
+const router = useRouter();
+const notifs = useNotificationsStore();
+
+onMounted(() => {
+    notifs.installAutoRefresh(router);
+});
 
 const outsideClickListener = ref(null);
 
@@ -42,7 +52,7 @@ function bindOutsideClickListener() {
 
 function unbindOutsideClickListener() {
     if (outsideClickListener.value) {
-        document.removeEventListener('click', outsideClickListener);
+        document.removeEventListener('click', outsideClickListener.value);
         outsideClickListener.value = null;
     }
 }
