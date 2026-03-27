@@ -11,10 +11,8 @@ export const useAuthStore = defineStore('auth', {
 
     getters: {
         isAuthenticated: (s) => !!s.me,
-
         roles: (s) => s.me?.roles ?? [],
         permissions: (s) => s.me?.permissions ?? [],
-
         hasRole: (s) => (role) => (s.me?.roles ?? []).includes(role),
         hasPermission: (s) => (perm) => (s.me?.permissions ?? []).includes(perm)
     },
@@ -48,14 +46,15 @@ export const useAuthStore = defineStore('auth', {
             } catch {}
         },
 
-        async login(email, password) {
+        async login(username, password) {
             this.loading = true;
             this.error = '';
 
             try {
-                const { data } = await api.post('/login', { email, password });
+                const response = await api.post('/login', { username, password });
+                const payload = response.data?.data;
 
-                this.setToken(data.token);
+                this.setToken(payload?.token ?? null);
 
                 const me = await this.fetchMe();
                 return me;
@@ -74,9 +73,11 @@ export const useAuthStore = defineStore('auth', {
             this.error = '';
 
             try {
-                const { data } = await api.get('/me');
-                this.setMe(data);
-                return data;
+                const response = await api.get('/me');
+                const me = response.data?.data ?? null;
+
+                this.setMe(me);
+                return me;
             } catch (e) {
                 this.setToken(null);
                 this.setMe(null);

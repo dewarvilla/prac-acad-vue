@@ -38,6 +38,7 @@ const canCreateSedes = computed(() => hasPerm('sedes.create'));
 const canEditSedes = computed(() => hasPerm('sedes.edit'));
 const canDeleteSedes = computed(() => hasPerm('sedes.delete'));
 const canAccessModule = computed(() => canViewSedes.value);
+const canBulkDelete = computed(() => canDeleteSedes.value && selected.value.length > 0);
 
 // -------------------------
 // Endpoints
@@ -75,6 +76,30 @@ function formatCoord(value, digits = 7) {
     return n.toFixed(digits);
 }
 
+function fmtDateTime(v) {
+    if (!v) return '—';
+
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+
+function extractFieldErrors(data) {
+    return data?.errors ?? data?.error?.fields ?? {};
+}
+
+function extractErrorMessage(data, fallback) {
+    return data?.message || data?.error?.detail || data?.error || fallback;
+}
+
 // -------------------------
 // Sort mapping
 // -------------------------
@@ -82,9 +107,9 @@ const SORT_MAP = {
     id: 'id',
     nombre: 'nombre',
     direccion: 'direccion',
-    activa: 'activa',
-    created_at: 'created_at',
-    updated_at: 'updated_at'
+    estado: 'estado',
+    fechacreacion: 'fechacreacion',
+    fechamodificacion: 'fechamodificacion'
 };
 
 function mapSort(uiField, order, map) {
@@ -132,28 +157,41 @@ async function getProducts(opts = {}) {
             signal
         });
 
-        if (Array.isArray(data)) {
-            products.value = data;
-            total.value = data.length;
-        } else {
-            products.value = data?.data ?? [];
-            total.value = Number(data?.meta?.total ?? products.value.length);
+        let rowsData = [];
+        let meta = null;
 
-            if (data?.meta?.current_page) page.value = Number(data.meta.current_page);
-            if (data?.meta?.per_page) rows.value = Number(data.meta.per_page);
+        if (Array.isArray(data)) {
+            rowsData = data;
+        } else if (Array.isArray(data?.data)) {
+            rowsData = data.data;
+            meta = data.meta ?? null;
+        } else if (Array.isArray(data?.data?.items)) {
+            rowsData = data.data.items;
+            meta = data.meta ?? data.data.meta ?? null;
+        } else if (Array.isArray(data?.items)) {
+            rowsData = data.items;
+            meta = data.meta ?? null;
         }
+
+        products.value = rowsData;
+        total.value = Number(meta?.total ?? rowsData.length);
+
+        if (meta?.current_page) page.value = Number(meta.current_page);
+        if (meta?.per_page) rows.value = Number(meta.per_page);
     } catch (e) {
         const canceled = e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError';
 
         if (!canceled) {
             const status = e?.response?.status;
-            const msg = e?.response?.data?.message || e.message;
+            const msg = extractErrorMessage(e?.response?.data, e.message);
+
             toast.add({
                 severity: 'error',
                 summary: 'Error al cargar',
                 detail: `[${status ?? 'ERR'}] ${msg}`,
                 life: 6500
             });
+
             products.value = [];
             total.value = 0;
         }
@@ -213,6 +251,7 @@ function forceFetch() {
         activeCtrl.abort();
         activeCtrl = null;
     }
+
     page.value = 1;
     getProducts({ force: true });
 }
@@ -220,11 +259,13 @@ function forceFetch() {
 function clearSearch() {
     search.value = '';
     page.value = 1;
+
     if (typingTimer) clearTimeout(typingTimer);
     if (activeCtrl) {
         activeCtrl.abort();
         activeCtrl = null;
     }
+
     getProducts();
 }
 
@@ -266,7 +307,7 @@ const defaults = () => ({
     direccion: '',
     latitud: '',
     longitud: '',
-    activa: true
+    estado: true
 });
 
 const product = ref(defaults());
@@ -276,7 +317,7 @@ const errors = reactive({
     direccion: '',
     latitud: '',
     longitud: '',
-    activa: ''
+    estado: ''
 });
 
 const touched = reactive({
@@ -284,7 +325,7 @@ const touched = reactive({
     direccion: false,
     latitud: false,
     longitud: false,
-    activa: false
+    estado: false
 });
 
 const rules = {
@@ -292,7 +333,7 @@ const rules = {
     direccion: [],
     latitud: [(v) => !!s(v).trim() || 'Requerido.', (v) => !Number.isNaN(Number(v)) || 'Debe ser numérica.', (v) => Number(v) >= -90 || 'Debe ser mayor o igual a -90.', (v) => Number(v) <= 90 || 'Debe ser menor o igual a 90.'],
     longitud: [(v) => !!s(v).trim() || 'Requerido.', (v) => !Number.isNaN(Number(v)) || 'Debe ser numérica.', (v) => Number(v) >= -180 || 'Debe ser mayor o igual a -180.', (v) => Number(v) <= 180 || 'Debe ser menor o igual a 180.'],
-    activa: []
+    estado: []
 };
 
 function resetValidation() {
@@ -302,6 +343,7 @@ function resetValidation() {
 
 function validateField(f) {
     errors[f] = '';
+
     for (const test of rules[f] || []) {
         const ok = test(product.value[f]);
         if (ok !== true) {
@@ -309,6 +351,7 @@ function validateField(f) {
             break;
         }
     }
+
     return !errors[f];
 }
 
@@ -334,7 +377,7 @@ function editProduct(row) {
         direccion: row.direccion ?? '',
         latitud: row.latitud != null ? String(row.latitud) : '',
         longitud: row.longitud != null ? String(row.longitud) : '',
-        activa: !!row.activa
+        estado: !!row.estado
     };
 
     resetValidation();
@@ -351,8 +394,10 @@ function flattenValidationErrors(errs) {
 function summarizeValidationErrors(errs) {
     const msgs = flattenValidationErrors(errs);
     if (!msgs.length) return null;
+
     const first = msgs[0];
     const more = msgs.length - 1;
+
     return more > 0 ? `${first} (y ${more} más)` : first;
 }
 
@@ -361,7 +406,7 @@ const SERVER_TO_FORM = {
     direccion: 'direccion',
     latitud: 'latitud',
     longitud: 'longitud',
-    activa: 'activa'
+    estado: 'estado'
 };
 
 function applyServerFieldErrors(serverErrors) {
@@ -373,6 +418,7 @@ function applyServerFieldErrors(serverErrors) {
     for (const [serverKey, msgs] of Object.entries(serverErrors)) {
         const formKey = SERVER_TO_FORM[serverKey];
         if (!formKey) continue;
+
         errors[formKey] = Array.isArray(msgs) ? (msgs[0] ?? '') : String(msgs ?? '');
         touched[formKey] = true;
     }
@@ -404,7 +450,7 @@ async function saveProduct() {
         direccion: s(product.value.direccion).trim() || null,
         latitud: s(product.value.latitud).trim(),
         longitud: s(product.value.longitud).trim(),
-        activa: !!product.value.activa
+        estado: !!product.value.estado
     };
 
     try {
@@ -433,14 +479,16 @@ async function saveProduct() {
     } catch (e) {
         const status = e?.response?.status;
         const data = e?.response?.data;
-        const msg = data?.message || data?.error || e.message;
+        const msg = extractErrorMessage(data, e.message);
 
         if (status === 422) {
-            applyServerFieldErrors(data?.errors);
+            const fieldErrors = extractFieldErrors(data);
+            applyServerFieldErrors(fieldErrors);
+
             toast.add({
                 severity: 'warn',
                 summary: 'No se pudo guardar',
-                detail: summarizeValidationErrors(data?.errors) || msg || 'Los datos enviados son inválidos.',
+                detail: summarizeValidationErrors(fieldErrors) || msg || 'Los datos enviados son inválidos.',
                 life: 6500
             });
             return;
@@ -471,15 +519,23 @@ function confirmDeleteProduct(row) {
 async function deleteProduct() {
     try {
         await api.delete(`${API_SED}/${current.value.id}`);
+
         products.value = products.value.filter((x) => x.id !== current.value.id);
-        toast.add({ severity: 'success', summary: 'Eliminada', life: 2500 });
-        await getProducts({ force: true });
+
+        toast.add({
+            severity: 'success',
+            summary: 'Eliminada',
+            life: 2500
+        });
+
+        await refreshAfterDelete(1);
     } catch (e) {
         const status = e?.response?.status;
-        const msg = e?.response?.data?.message || e.message;
+        const msg = extractErrorMessage(e?.response?.data, e.message);
+
         toast.add({
-            severity: 'error',
-            summary: 'No se pudo eliminar',
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede eliminar' : 'No se pudo eliminar',
             detail: `[${status ?? 'ERR'}] ${msg}`,
             life: 5000
         });
@@ -490,7 +546,6 @@ async function deleteProduct() {
 }
 
 const bulkDeleteDialog = ref(false);
-const canBulkDelete = computed(() => canDeleteSedes.value && selected.value.length > 0);
 
 function confirmBulkDelete() {
     if (!canBulkDelete.value) {
@@ -502,6 +557,7 @@ function confirmBulkDelete() {
         });
         return;
     }
+
     bulkDeleteDialog.value = true;
 }
 
@@ -521,19 +577,33 @@ async function bulkDelete() {
             life: 2500
         });
 
-        await getProducts({ force: true });
+        await refreshAfterDelete(ids.length);
     } catch (e) {
         const status = e?.response?.status;
-        const msg = e?.response?.data?.message || e.message;
+        const msg = extractErrorMessage(e?.response?.data, e.message);
+
         toast.add({
-            severity: 'error',
-            summary: 'Error al eliminar',
+            severity: status === 409 ? 'warn' : 'error',
+            summary: status === 409 ? 'No se puede eliminar' : 'Error al eliminar',
             detail: `[${status ?? 'ERR'}] ${msg}`,
             life: 6000
         });
     } finally {
         bulkDeleteDialog.value = false;
     }
+}
+
+function refreshAfterDelete(deletedCount = 1) {
+    total.value = Math.max(0, Number(total.value) - Number(deletedCount));
+
+    const r = Number(rows.value) || 10;
+    const totalPages = Math.max(1, Math.ceil(total.value / r));
+
+    if (Number(page.value) > totalPages) {
+        page.value = totalPages;
+    }
+
+    return getProducts({ force: true });
 }
 
 // -------------------------
@@ -608,7 +678,7 @@ onMounted(async () => {
                                     @keydown.enter.prevent="forceFetch"
                                     @keydown.esc.prevent="clearSearch"
                                 />
-                                <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" @click="clearSearch" aria-label="Limpiar búsqueda">X</button>
+                                <button v-if="search" type="button" class="absolute right-3 top-1/2 -translate-y-1/2" aria-label="Limpiar búsqueda" @click="clearSearch">X</button>
                             </IconField>
                         </form>
                     </div>
@@ -655,7 +725,7 @@ onMounted(async () => {
                     </template>
                 </Column>
 
-                <Column field="nombre" header="Nombre" sortable style="min-width: 20rem; max-width: 30rem">
+                <Column field="nombre" header="Nombre" sortable style="min-width: 18rem">
                     <template #body="{ data }">
                         <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.nombre">
                             {{ data.nombre }}
@@ -663,17 +733,17 @@ onMounted(async () => {
                     </template>
                 </Column>
 
-                <Column field="direccion" header="Dirección" sortable style="min-width: 24rem; max-width: 40rem">
+                <Column field="direccion" header="Dirección" sortable style="min-width: 22rem">
                     <template #body="{ data }">
-                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.direccion || '—'">
+                        <span class="block overflow-hidden text-ellipsis whitespace-nowrap" v-tooltip.top="data.direccion || 'Sin dirección registrada'">
                             {{ data.direccion || '—' }}
                         </span>
                     </template>
                 </Column>
 
-                <Column field="activa" header="Estado" sortable style="width: 12rem; max-width: 12rem">
+                <Column field="estado" header="Estado" sortable style="width: 12rem; max-width: 12rem">
                     <template #body="{ data }">
-                        <Tag :value="estadoLabel(data.activa)" :severity="estadoSeverity(data.activa)" />
+                        <Tag :value="estadoLabel(data.estado)" :severity="estadoSeverity(data.estado)" />
                     </template>
                 </Column>
 
@@ -685,37 +755,43 @@ onMounted(async () => {
                 </Column>
             </DataTable>
 
-            <Dialog v-model:visible="productDialog" :header="product.id ? 'Editar sede' : 'Crear sede'" :style="{ width: '42rem' }" :modal="true">
+            <Dialog v-model:visible="productDialog" :header="product.id ? 'Editar sede' : 'Crear sede'" :style="{ width: '40rem' }" :modal="true">
                 <div class="flex flex-col gap-4" @keydown.capture="onFormKeyCapture">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div class="flex flex-col gap-2 md:col-span-2">
-                            <label for="nombre">Nombre</label>
-                            <InputText id="nombre" name="nombre" v-model.trim="product.nombre" :invalid="showError('nombre')" @blur="onBlur('nombre')" @keydown.space.stop />
-                            <small v-if="showError('nombre')" class="text-red-500">{{ errors.nombre }}</small>
-                        </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="nombre">Nombre</label>
+                        <InputText id="nombre" v-model.trim="product.nombre" :invalid="showError('nombre')" @blur="onBlur('nombre')" fluid />
+                        <small v-if="showError('nombre')" class="text-red-500">
+                            {{ errors.nombre }}
+                        </small>
+                    </div>
 
-                        <div class="flex flex-col gap-2 md:col-span-2">
-                            <label for="direccion">Dirección</label>
-                            <InputText id="direccion" name="direccion" v-model.trim="product.direccion" :invalid="showError('direccion')" @blur="onBlur('direccion')" @keydown.space.stop />
-                            <small v-if="showError('direccion')" class="text-red-500">{{ errors.direccion }}</small>
-                        </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="direccion">Dirección</label>
+                        <InputText id="direccion" v-model.trim="product.direccion" :invalid="showError('direccion')" @blur="onBlur('direccion')" fluid />
+                        <small v-if="showError('direccion')" class="text-red-500">
+                            {{ errors.direccion }}
+                        </small>
+                    </div>
 
-                        <div class="flex flex-col gap-2">
-                            <label for="latitud">Latitud</label>
-                            <InputText id="latitud" v-model.trim="product.latitud" inputmode="decimal" placeholder="Ej. 8.7918200" :invalid="showError('latitud')" @blur="onBlur('latitud')" />
-                            <small v-if="showError('latitud')" class="text-red-500">{{ errors.latitud }}</small>
-                        </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="latitud">Latitud</label>
+                        <InputText id="latitud" v-model.trim="product.latitud" :invalid="showError('latitud')" @blur="onBlur('latitud')" fluid />
+                        <small v-if="showError('latitud')" class="text-red-500">
+                            {{ errors.latitud }}
+                        </small>
+                    </div>
 
-                        <div class="flex flex-col gap-2">
-                            <label for="longitud">Longitud</label>
-                            <InputText id="longitud" v-model.trim="product.longitud" inputmode="decimal" placeholder="Ej. -75.8621800" :invalid="showError('longitud')" @blur="onBlur('longitud')" />
-                            <small v-if="showError('longitud')" class="text-red-500">{{ errors.longitud }}</small>
-                        </div>
+                    <div class="flex flex-col gap-2">
+                        <label for="longitud">Longitud</label>
+                        <InputText id="longitud" v-model.trim="product.longitud" :invalid="showError('longitud')" @blur="onBlur('longitud')" fluid />
+                        <small v-if="showError('longitud')" class="text-red-500">
+                            {{ errors.longitud }}
+                        </small>
+                    </div>
 
-                        <div class="flex items-center gap-3 mt-2 md:col-span-2">
-                            <Checkbox id="activa" v-model="product.activa" :binary="true" />
-                            <label for="activa">Activa</label>
-                        </div>
+                    <div v-if="product.id" class="flex items-center gap-3 pt-2">
+                        <Checkbox id="estado" v-model="product.estado" :binary="true" />
+                        <label for="estado">Activa</label>
                     </div>
                 </div>
 
@@ -763,26 +839,31 @@ onMounted(async () => {
                             </div>
 
                             <div class="flex flex-wrap items-center gap-2 sm:justify-end">
-                                <Tag :value="estadoLabel(d.activa)" :severity="estadoSeverity(d.activa)" />
+                                <Tag :value="estadoLabel(d.estado)" :severity="estadoSeverity(d.estado)" />
                             </div>
                         </div>
 
-                        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <div class="text-sm font-semibold mb-1">Latitud</div>
-                                <div class="border rounded-md p-2 break-words">
-                                    {{ formatCoord(d.latitud) }}
-                                </div>
-                            </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 text-sm">
+                            <div><b>Latitud:</b> {{ formatCoord(d.latitud) }}</div>
+                            <div><b>Longitud:</b> {{ formatCoord(d.longitud) }}</div>
+                        </div>
 
-                            <div>
-                                <div class="text-sm font-semibold mb-1">Longitud</div>
-                                <div class="border rounded-md p-2 break-words">
-                                    {{ formatCoord(d.longitud) }}
-                                </div>
+                        <div class="mt-4 pt-4 border-t">
+                            <div class="text-sm font-semibold mb-3">Auditoría</div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                <div><b>Fecha creación:</b> {{ fmtDateTime(d.fechacreacion) }}</div>
+                                <div><b>Usuario creación:</b> {{ d.usuariocreacion ?? '—' }}</div>
+                                <div><b>IP creación:</b> {{ d.ipcreacion ?? '—' }}</div>
+
+                                <div><b>Fecha modificación:</b> {{ fmtDateTime(d.fechamodificacion) }}</div>
+                                <div><b>Usuario modificación:</b> {{ d.usuariomodificacion ?? '—' }}</div>
+                                <div><b>IP modificación:</b> {{ d.ipmodificacion ?? '—' }}</div>
                             </div>
                         </div>
                     </div>
+
+                    <div v-if="!details.length" class="text-surface-500">No fue posible cargar los detalles de los registros seleccionados.</div>
                 </div>
 
                 <template #footer>

@@ -10,18 +10,18 @@ const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 
-const email = ref('');
+const username = ref('');
 const password = ref('');
 const remember = ref(false);
 
-const canSubmit = computed(() => email.value.trim().length > 3 && password.value.length >= 1 && !auth.loading);
+const canSubmit = computed(() => username.value.trim().length > 0 && password.value.length >= 1 && !auth.loading);
 
 async function onSubmit(e) {
     e?.preventDefault?.();
     if (!canSubmit.value) return;
 
     try {
-        await auth.login(email.value.trim(), password.value);
+        await auth.login(username.value.trim(), password.value);
         const redirect = (route.query.redirect && String(route.query.redirect)) || '/';
         router.replace(redirect);
     } catch {
@@ -57,7 +57,7 @@ async function onSubmit(e) {
                     <div class="max-w-[30rem] mx-auto w-full">
                         <div class="mb-8">
                             <label for="email1" class="block text-surface-900 dark:text-surface-0 text-xl font-medium mb-2">Email</label>
-                            <InputText id="email1" type="text" autocomplete="username" placeholder="usuario o correo" class="w-full" v-model="email" :invalid="auth.error && !email" />
+                            <InputText id="username1" type="text" autocomplete="username" placeholder="usuario o correo" class="w-full" v-model="username" />
                         </div>
 
                         <div class="mb-4">
