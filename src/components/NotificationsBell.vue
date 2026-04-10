@@ -1,15 +1,17 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { api } from '@/api';
 import { useNotificationsStore } from '@/stores/notifications';
 
-import Popover from 'primevue/popover';
 import Badge from 'primevue/badge';
 import Button from 'primevue/button';
-import Tag from 'primevue/tag';
 import Divider from 'primevue/divider';
+import Popover from 'primevue/popover';
 import ProgressSpinner from 'primevue/progressspinner';
+import Tag from 'primevue/tag';
+
+const LIST_CACHE_MS = 10000;
 
 const router = useRouter();
 const op = ref(null);
@@ -18,60 +20,79 @@ const notifs = useNotificationsStore();
 
 const items = ref([]);
 const loading = ref(false);
+const lastFetchedAt = ref(0);
+const lastUnreadMode = ref(true);
 
 const unreadCount = computed(() => Number(notifs.unreadCount || 0));
 
 const notifDisplay = computed(() => {
-    const c = unreadCount.value;
-    if (!c) return '';
-    return c > 99 ? '99+' : String(c);
+    const count = unreadCount.value;
+
+    if (!count) return '';
+
+    return count > 99 ? '99+' : String(count);
 });
 
 function normalizeList(data) {
     const list = Array.isArray(data) ? data : (data?.data ?? []);
-    return list.map((n) => ({
-        id: n.id,
-        data: n.data ?? {},
-        created_at: n.created_at ?? n.createdAt ?? null,
-        read_at: n.read_at ?? n.readAt ?? null
+
+    return list.map((item) => ({
+        id: item.id,
+        title: item.title ?? item.asunto ?? 'Notificacion',
+        message: item.message ?? item.mensaje ?? item.body ?? item.descripcion ?? 'Tienes una notificacion pendiente.',
+        url: item.url ?? null,
+        kind: item.kind ?? null,
+        module: item.module ?? null,
+        created_at: item.created_at ?? item.createdAt ?? null,
+        read_at: item.read_at ?? item.readAt ?? null
     }));
 }
 
-async function fetchNotifications({ onlyUnread = true } = {}) {
+async function fetchNotifications({ onlyUnread = true, force = false } = {}) {
+    const now = Date.now();
+
+    if (!force && loading.value) return;
+
+    if (!force && items.value.length > 0 && lastUnreadMode.value === onlyUnread && now - lastFetchedAt.value < LIST_CACHE_MS) {
+        return;
+    }
+
     loading.value = true;
+
     try {
         const { data } = await api.get('/notifications', {
             params: { per_page: 10, page: 1, unread: onlyUnread ? 1 : 0 }
         });
 
-        let list = normalizeList(data);
-        if (onlyUnread) list = list.filter((n) => !n.read_at);
-        items.value = list;
+        items.value = normalizeList(data);
+        lastFetchedAt.value = Date.now();
+        lastUnreadMode.value = onlyUnread;
     } finally {
         loading.value = false;
     }
 }
 
 async function markAllRead() {
-    await api.post('/notifications/read-all');
+    await api.patch('/notifications/read-all');
     items.value = [];
     notifs.unreadCount = 0;
+    lastFetchedAt.value = Date.now();
 }
 
-function resolveNotificationUrl(n) {
-    return n?.data?.url ?? null;
+function resolveNotificationUrl(notification) {
+    return notification?.url ?? null;
 }
 
-async function openNotification(n) {
-    const target = resolveNotificationUrl(n);
-    const wasUnread = !n?.read_at;
+async function openNotification(notification) {
+    const target = resolveNotificationUrl(notification);
+    const wasUnread = !notification?.read_at;
 
     try {
         if (wasUnread) {
-            await api.post(`/notifications/${n.id}/read`);
+            await api.patch(`/notifications/${notification.id}/read`);
         }
 
-        items.value = items.value.filter((x) => x.id !== n.id);
+        items.value = items.value.filter((item) => item.id !== notification.id);
 
         if (wasUnread) {
             notifs.unreadCount = Math.max(0, unreadCount.value - 1);
@@ -82,17 +103,17 @@ async function openNotification(n) {
         if (target) {
             await router.push(target);
         }
-    } catch (e) {
-        console.error('No se pudo abrir la notificación', e);
+    } catch (error) {
+        console.error('No se pudo abrir la notificacion', error);
     }
 }
 
-function onBellBtnClick(e) {
-    op.value?.toggle?.(e);
-    notifs.refreshUnreadCount();
+function onBellBtnClick(event) {
+    op.value?.toggle?.(event);
     fetchNotifications({ onlyUnread: true });
 }
 </script>
+
 <template>
     <div class="relative inline-flex">
         <button type="button" class="layout-topbar-action" aria-label="Notificaciones" @click="onBellBtnClick($event)">
@@ -122,16 +143,16 @@ function onBellBtnClick(e) {
 
             <div v-else-if="!items.length" class="py-6 text-center text-surface-600">
                 <div class="text-base font-medium">No tienes notificaciones</div>
-                <div class="text-sm mt-1">Cuando tengas solicitudes o alertas aparecerán aquí.</div>
+                <div class="text-sm mt-1">Cuando tengas solicitudes o alertas apareceran aqui.</div>
             </div>
 
             <div v-else class="flex flex-col gap-2">
-                <button v-for="n in items" :key="n.id" type="button" class="w-full text-left p-2 rounded border hover:bg-surface-50 transition" @click="openNotification(n)">
+                <button v-for="notification in items" :key="notification.id" type="button" class="w-full text-left p-2 rounded border hover:bg-surface-50 transition" @click="openNotification(notification)">
                     <div class="font-medium truncate">
-                        {{ n.data?.title ?? n.data?.asunto ?? 'Notificación' }}
+                        {{ notification.title }}
                     </div>
                     <div class="text-sm text-surface-600 mt-0.5">
-                        {{ n.data?.message ?? n.data?.mensaje ?? n.data?.body ?? n.data?.descripcion ?? 'Tienes una notificación pendiente.' }}
+                        {{ notification.message }}
                     </div>
                 </button>
             </div>

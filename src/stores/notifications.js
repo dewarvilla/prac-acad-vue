@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth';
 import { defineStore } from 'pinia';
 
 let installed = false;
+const REFRESH_COOLDOWN_MS = 10000;
 
 export const useNotificationsStore = defineStore('notifications', {
     state: () => ({
@@ -32,7 +33,7 @@ export const useNotificationsStore = defineStore('notifications', {
 
             const now = Date.now();
 
-            if (!force && now - this._lastFetchAt < 1500) return;
+            if (!force && now - this._lastFetchAt < REFRESH_COOLDOWN_MS) return;
             if (this._inFlight) return;
 
             this._inFlight = true;

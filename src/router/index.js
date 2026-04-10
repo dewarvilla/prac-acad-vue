@@ -41,7 +41,13 @@ const router = createRouter({
                 {
                     path: 'pages/aprobaciones',
                     name: 'approvalsInbox',
-                    component: () => import('@/components/ApprovalInbox.vue'),
+                    redirect: { name: 'approvalsCreacion' },
+                    meta: { requiresAuth: true, permission: 'approvals.inbox' }
+                },
+                {
+                    path: 'pages/aprobaciones/creacion',
+                    name: 'approvalsCreacion',
+                    component: () => import('@/views/pages/AprobacionesCreaciones.vue'),
                     meta: { requiresAuth: true, permission: 'approvals.inbox' }
                 },
 

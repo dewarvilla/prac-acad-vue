@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', {
         isAuthenticated: (s) => !!s.me,
         roles: (s) => s.me?.roles ?? [],
         permissions: (s) => s.me?.permissions ?? [],
+        menu: (s) => s.me?.menu ?? [],
         hasRole: (s) => (role) => (s.me?.roles ?? []).includes(role),
         hasPermission: (s) => (perm) => (s.me?.permissions ?? []).includes(perm)
     },
